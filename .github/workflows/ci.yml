@@ -18,12 +18,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
 
       - name: Run go fmt
         run: |
-          if [ -n "$(go fmt ./...)" ]; then
+          if [ -n "$(gofmt -l .)" ]; then
             echo "Go files are not formatted. Run 'go fmt ./...'"
+            gofmt -l .
             exit 1
           fi
 
@@ -43,7 +44,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
 
       - name: Run tests
         run: go test -v -cover -timeout 30s ./...
@@ -56,13 +57,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+          go-version-file: 'go.mod'
 
       - name: Run govulncheck
-        run: govulncheck ./...
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: 'go.mod'
+          go-package: ./...
 
   build:
     name: Build
@@ -76,7 +77,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
 
       - name: Build
         env:

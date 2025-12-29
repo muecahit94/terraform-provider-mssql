@@ -19,7 +19,9 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          token: ${{ github.token }}
+          # Use a PAT if you want release-please to create PRs
+          # For now, using GITHUB_TOKEN which requires repo settings change
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -34,7 +36,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
