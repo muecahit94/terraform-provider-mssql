@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.1.0...v1.2.0) (2025-12-29)
+
+
+### Features
+
+* disable GPG signing in GoReleaser and the release workflow. ([ea323c9](https://github.com/muecahit94/terraform-provider-mssql/commit/ea323c992ede2099a34771ece4211e7db324442b))
+
 ## [1.1.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.0.0...v1.1.0) (2025-12-29)
 
 
