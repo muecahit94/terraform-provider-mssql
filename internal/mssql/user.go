@@ -21,10 +21,6 @@ type User struct {
 
 // GetUser retrieves a user from a specific database.
 func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*User, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			dp.principal_id, 
@@ -36,10 +32,14 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E')`
-	row := c.QueryRowContext(ctx, query, userName)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, userName)
+	if err != nil {
+		return nil, err
+	}
 
 	var user User
-	err := row.Scan(
+	err = row.Scan(
 		&user.PrincipalID,
 		&user.Name,
 		&user.DatabaseID,
@@ -59,10 +59,6 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 
 // GetUserByID retrieves a user by principal ID from a specific database.
 func (c *Client) GetUserByID(ctx context.Context, databaseName string, principalID int) (*User, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			dp.principal_id, 
@@ -74,10 +70,14 @@ func (c *Client) GetUserByID(ctx context.Context, databaseName string, principal
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.principal_id = @p1 AND dp.type IN ('S', 'U', 'E')`
-	row := c.QueryRowContext(ctx, query, principalID)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
+	if err != nil {
+		return nil, err
+	}
 
 	var user User
-	err := row.Scan(
+	err = row.Scan(
 		&user.PrincipalID,
 		&user.Name,
 		&user.DatabaseID,
@@ -97,8 +97,16 @@ func (c *Client) GetUserByID(ctx context.Context, databaseName string, principal
 
 // ListUsers retrieves all users from a specific database.
 func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
 	query := `
@@ -113,7 +121,8 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.type IN ('S', 'U', 'E')
 		ORDER BY dp.name`
-	rows, err := c.QueryContext(ctx, query)
+
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
@@ -148,10 +157,6 @@ type CreateSQLUserOptions struct {
 
 // CreateSQLUser creates a new SQL user mapped to a login.
 func (c *Client) CreateSQLUser(ctx context.Context, opts CreateSQLUserOptions) (*User, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	defaultSchema := opts.DefaultSchema
 	if defaultSchema == "" {
 		defaultSchema = "dbo"
@@ -164,12 +169,19 @@ func (c *Client) CreateSQLUser(ctx context.Context, opts CreateSQLUserOptions) (
 		defaultSchema,
 	)
 
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SQL user: %w", err)
 	}
 
-	return c.GetUser(ctx, opts.DatabaseName, opts.UserName)
+	user, err := c.GetUser(ctx, opts.DatabaseName, opts.UserName)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, fmt.Errorf("user was created but could not be retrieved")
+	}
+	return user, nil
 }
 
 // UpdateSQLUserOptions contains options for updating a SQL user.
@@ -181,13 +193,10 @@ type UpdateSQLUserOptions struct {
 
 // UpdateSQLUser updates an existing SQL user.
 func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (*User, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	if opts.DefaultSchema != nil {
 		query := fmt.Sprintf("ALTER USER [%s] WITH DEFAULT_SCHEMA = [%s]", opts.UserName, *opts.DefaultSchema)
-		if _, err := c.ExecContext(ctx, query); err != nil {
+		err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
+		if err != nil {
 			return nil, fmt.Errorf("failed to update SQL user: %w", err)
 		}
 	}
@@ -197,12 +206,8 @@ func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (
 
 // DropUser drops a user from a database.
 func (c *Client) DropUser(ctx context.Context, databaseName, userName string) error {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return err
-	}
-
 	query := fmt.Sprintf("DROP USER IF EXISTS [%s]", userName)
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop user: %w", err)
 	}

@@ -66,8 +66,9 @@ resource "mssql_database_permission" "readers_select" {
 
 # Grant EXECUTE permission on the schema
 resource "mssql_schema_permission" "app_execute" {
-  database_name  = mssql_database.app.name
-  schema_name    = mssql_schema.app.name
-  principal_name = mssql_sql_user.app.name
-  permission     = "EXECUTE"
+  database_name     = mssql_database.app.name
+  schema_name       = mssql_schema.app.name
+  principal_name    = mssql_sql_user.app.name
+  permission        = "EXECUTE"
+  with_grant_option = true
 }

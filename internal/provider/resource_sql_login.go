@@ -231,8 +231,8 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 		Name: data.Name.ValueString(),
 	}
 
-	// Check what changed
-	if !data.Password.Equal(state.Password) {
+	// Check what changed - only update if values actually differ
+	if !data.Password.Equal(state.Password) && !data.Password.IsNull() && data.Password.ValueString() != "" {
 		password := data.Password.ValueString()
 		opts.Password = &password
 	}
@@ -240,7 +240,8 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 		db := data.DefaultDatabase.ValueString()
 		opts.DefaultDatabase = &db
 	}
-	if !data.DefaultLanguage.Equal(state.DefaultLanguage) {
+	// Only update language if explicitly changed and not empty
+	if !data.DefaultLanguage.Equal(state.DefaultLanguage) && !data.DefaultLanguage.IsNull() && data.DefaultLanguage.ValueString() != "" {
 		lang := data.DefaultLanguage.ValueString()
 		opts.DefaultLanguage = &lang
 	}
@@ -257,11 +258,21 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 		opts.IsDisabled = &disabled
 	}
 
-	_, err := r.client.UpdateSQLLogin(ctx, opts)
+	// Skip update if nothing changed
+	if opts.Password == nil && opts.DefaultDatabase == nil && opts.DefaultLanguage == nil &&
+		opts.CheckExpirationEnabled == nil && opts.CheckPolicyEnabled == nil && opts.IsDisabled == nil {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+		return
+	}
+
+	login, err := r.client.UpdateSQLLogin(ctx, opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update SQL login", err.Error())
 		return
 	}
+
+	// Update state with actual values from the server to resolve "known after apply" values
+	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

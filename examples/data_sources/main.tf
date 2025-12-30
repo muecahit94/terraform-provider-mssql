@@ -27,7 +27,7 @@ data "mssql_database" "master" {
 
 # Execute a custom query
 data "mssql_query" "version" {
-  query = "SELECT @@VERSION as version, GETDATE() as current_time"
+  query = "SELECT @@VERSION as version"
 }
 
 # List all logins

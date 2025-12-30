@@ -2,7 +2,7 @@ terraform {
   required_providers {
     mssql = {
       source  = "muecahit94/mssql"
-      version = "~> 0.1"
+      version = "~> 1.0"
     }
   }
 }
@@ -12,7 +12,7 @@ provider "mssql" {
   hostname = "localhost"
   port     = 1433
 
-  sql_auth = {
+  sql_auth {
     username = "sa"
     password = "P@ssw0rd123!"
   }

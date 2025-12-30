@@ -214,3 +214,48 @@ func (c *Client) UseDatabase(ctx context.Context, databaseName string) error {
 	_, err := c.db.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName))
 	return err
 }
+
+// ExecInDatabaseContext executes a query in the context of a specific database.
+// This uses a dedicated connection to ensure the USE statement persists for the query.
+func (c *Client) ExecInDatabaseContext(ctx context.Context, databaseName, query string) error {
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return fmt.Errorf("failed to switch database context: %w", err)
+	}
+
+	// Execute the query in the correct context
+	if _, err := conn.ExecContext(ctx, query); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// QueryRowInDatabaseContext executes a query in the context of a specific database and returns a row.
+// This uses a dedicated connection to ensure the USE statement persists for the query.
+func (c *Client) QueryRowInDatabaseContext(ctx context.Context, databaseName, query string, args ...interface{}) (*sql.Row, error) {
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	// Note: We don't close the connection here because the Row needs it for scanning
+	// The connection will be returned to the pool when the row is scanned or closed
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
+	}
+
+	// Execute the query in the correct context
+	row := conn.QueryRowContext(ctx, query, args...)
+	return row, nil
+}

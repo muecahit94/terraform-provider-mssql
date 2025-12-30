@@ -21,10 +21,6 @@ type DatabaseRole struct {
 
 // GetDatabaseRole retrieves a database role by name.
 func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName string) (*DatabaseRole, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			dp.principal_id, 
@@ -36,10 +32,14 @@ func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName str
 		FROM sys.database_principals dp
 		LEFT JOIN sys.database_principals owner ON dp.owning_principal_id = owner.principal_id
 		WHERE dp.name = @p1 AND dp.type = 'R'`
-	row := c.QueryRowContext(ctx, query, roleName)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, roleName)
+	if err != nil {
+		return nil, err
+	}
 
 	var role DatabaseRole
-	err := row.Scan(
+	err = row.Scan(
 		&role.PrincipalID,
 		&role.Name,
 		&role.DatabaseID,
@@ -59,10 +59,6 @@ func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName str
 
 // GetDatabaseRoleByID retrieves a database role by principal ID.
 func (c *Client) GetDatabaseRoleByID(ctx context.Context, databaseName string, principalID int) (*DatabaseRole, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			dp.principal_id, 
@@ -74,10 +70,14 @@ func (c *Client) GetDatabaseRoleByID(ctx context.Context, databaseName string, p
 		FROM sys.database_principals dp
 		LEFT JOIN sys.database_principals owner ON dp.owning_principal_id = owner.principal_id
 		WHERE dp.principal_id = @p1 AND dp.type = 'R'`
-	row := c.QueryRowContext(ctx, query, principalID)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
+	if err != nil {
+		return nil, err
+	}
 
 	var role DatabaseRole
-	err := row.Scan(
+	err = row.Scan(
 		&role.PrincipalID,
 		&role.Name,
 		&role.DatabaseID,
@@ -97,8 +97,16 @@ func (c *Client) GetDatabaseRoleByID(ctx context.Context, databaseName string, p
 
 // ListDatabaseRoles retrieves all database roles.
 func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]DatabaseRole, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
 	query := `
@@ -113,7 +121,8 @@ func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]
 		LEFT JOIN sys.database_principals owner ON dp.owning_principal_id = owner.principal_id
 		WHERE dp.type = 'R'
 		ORDER BY dp.name`
-	rows, err := c.QueryContext(ctx, query)
+
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list database roles: %w", err)
 	}
@@ -147,21 +156,24 @@ type CreateDatabaseRoleOptions struct {
 
 // CreateDatabaseRole creates a new database role.
 func (c *Client) CreateDatabaseRole(ctx context.Context, opts CreateDatabaseRoleOptions) (*DatabaseRole, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	query := fmt.Sprintf("CREATE ROLE [%s]", opts.RoleName)
 	if opts.OwnerName != "" {
 		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
 	}
 
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database role: %w", err)
 	}
 
-	return c.GetDatabaseRole(ctx, opts.DatabaseName, opts.RoleName)
+	role, err := c.GetDatabaseRole(ctx, opts.DatabaseName, opts.RoleName)
+	if err != nil {
+		return nil, err
+	}
+	if role == nil {
+		return nil, fmt.Errorf("role was created but could not be retrieved")
+	}
+	return role, nil
 }
 
 // UpdateDatabaseRoleOptions contains options for updating a database role.
@@ -213,10 +225,6 @@ type DatabaseRoleMember struct {
 
 // GetDatabaseRoleMember retrieves a role membership.
 func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) (*DatabaseRoleMember, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			role_dp.principal_id,
@@ -228,10 +236,14 @@ func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 		INNER JOIN sys.database_principals role_dp ON drm.role_principal_id = role_dp.principal_id
 		INNER JOIN sys.database_principals member_dp ON drm.member_principal_id = member_dp.principal_id
 		WHERE role_dp.name = @p1 AND member_dp.name = @p2`
-	row := c.QueryRowContext(ctx, query, roleName, memberName)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, roleName, memberName)
+	if err != nil {
+		return nil, err
+	}
 
 	var member DatabaseRoleMember
-	err := row.Scan(
+	err = row.Scan(
 		&member.RoleID,
 		&member.RoleName,
 		&member.MemberID,
@@ -250,12 +262,8 @@ func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 
 // AddDatabaseRoleMember adds a member to a database role.
 func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return err
-	}
-
 	query := fmt.Sprintf("ALTER ROLE [%s] ADD MEMBER [%s]", roleName, memberName)
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to add database role member: %w", err)
 	}
@@ -265,12 +273,8 @@ func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 
 // RemoveDatabaseRoleMember removes a member from a database role.
 func (c *Client) RemoveDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return err
-	}
-
 	query := fmt.Sprintf("ALTER ROLE [%s] DROP MEMBER [%s]", roleName, memberName)
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to remove database role member: %w", err)
 	}

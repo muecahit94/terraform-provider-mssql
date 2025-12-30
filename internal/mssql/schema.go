@@ -19,10 +19,6 @@ type Schema struct {
 
 // GetSchema retrieves a schema by name.
 func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string) (*Schema, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			s.schema_id, 
@@ -32,10 +28,14 @@ func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string)
 		FROM sys.schemas s
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		WHERE s.name = @p1`
-	row := c.QueryRowContext(ctx, query, schemaName)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, schemaName)
+	if err != nil {
+		return nil, err
+	}
 
 	var schema Schema
-	err := row.Scan(
+	err = row.Scan(
 		&schema.SchemaID,
 		&schema.Name,
 		&schema.OwnerName,
@@ -53,10 +53,6 @@ func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string)
 
 // GetSchemaByID retrieves a schema by ID.
 func (c *Client) GetSchemaByID(ctx context.Context, databaseName string, schemaID int) (*Schema, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
-	}
-
 	query := `
 		SELECT 
 			s.schema_id, 
@@ -66,10 +62,14 @@ func (c *Client) GetSchemaByID(ctx context.Context, databaseName string, schemaI
 		FROM sys.schemas s
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		WHERE s.schema_id = @p1`
-	row := c.QueryRowContext(ctx, query, schemaID)
+
+	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, schemaID)
+	if err != nil {
+		return nil, err
+	}
 
 	var schema Schema
-	err := row.Scan(
+	err = row.Scan(
 		&schema.SchemaID,
 		&schema.Name,
 		&schema.OwnerName,
@@ -87,8 +87,16 @@ func (c *Client) GetSchemaByID(ctx context.Context, databaseName string, schemaI
 
 // ListSchemas retrieves all schemas from a database.
 func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema, error) {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return nil, err
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
 	query := `
@@ -100,7 +108,8 @@ func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema
 		FROM sys.schemas s
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		ORDER BY s.name`
-	rows, err := c.QueryContext(ctx, query)
+
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
@@ -132,21 +141,24 @@ type CreateSchemaOptions struct {
 
 // CreateSchema creates a new schema.
 func (c *Client) CreateSchema(ctx context.Context, opts CreateSchemaOptions) (*Schema, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	query := fmt.Sprintf("CREATE SCHEMA [%s]", opts.SchemaName)
 	if opts.OwnerName != "" {
 		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
 	}
 
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	return c.GetSchema(ctx, opts.DatabaseName, opts.SchemaName)
+	schema, err := c.GetSchema(ctx, opts.DatabaseName, opts.SchemaName)
+	if err != nil {
+		return nil, err
+	}
+	if schema == nil {
+		return nil, fmt.Errorf("schema was created but could not be retrieved")
+	}
+	return schema, nil
 }
 
 // UpdateSchemaOptions contains options for updating a schema.
@@ -158,13 +170,10 @@ type UpdateSchemaOptions struct {
 
 // UpdateSchema updates an existing schema.
 func (c *Client) UpdateSchema(ctx context.Context, opts UpdateSchemaOptions) (*Schema, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	if opts.NewOwnerName != nil {
 		query := fmt.Sprintf("ALTER AUTHORIZATION ON SCHEMA::[%s] TO [%s]", opts.SchemaName, *opts.NewOwnerName)
-		if _, err := c.ExecContext(ctx, query); err != nil {
+		err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
+		if err != nil {
 			return nil, fmt.Errorf("failed to update schema owner: %w", err)
 		}
 	}
@@ -174,12 +183,8 @@ func (c *Client) UpdateSchema(ctx context.Context, opts UpdateSchemaOptions) (*S
 
 // DropSchema drops a schema.
 func (c *Client) DropSchema(ctx context.Context, databaseName, schemaName string) error {
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return err
-	}
-
 	query := fmt.Sprintf("DROP SCHEMA IF EXISTS [%s]", schemaName)
-	_, err := c.ExecContext(ctx, query)
+	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop schema: %w", err)
 	}
