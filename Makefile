@@ -46,16 +46,16 @@ govulncheck:
 	govulncheck ./...
 
 docker-up:
-	docker-compose up -d
+	docker compose up -d
 	@echo "Waiting for SQL Server to be ready..."
 	@sleep 15
 	@echo "SQL Server should be ready!"
 
 docker-down:
-	docker-compose down -v
+	docker compose down -v
 
 docker-logs:
-	docker-compose logs -f mssql
+	docker compose logs -f mssql
 
 clean:
 	rm -f ${BINARY}
@@ -63,7 +63,7 @@ clean:
 
 # Development workflow: rebuild, reinstall, and test
 dev: install
-	cd examples/provider && rm -rf .terraform* && terraform init && terraform plan
+	cd examples/testing/provider && rm -rf .terraform* && terraform init && terraform plan
 
 # Run all quality checks
 check: fmt vet lint test
