@@ -1,4 +1,4 @@
-.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev
+.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev e2e
 
 HOSTNAME=registry.terraform.io
 NAMESPACE=muecahit94
@@ -67,3 +67,7 @@ dev: install
 
 # Run all quality checks
 check: fmt vet lint test
+
+# Run end-to-end tests (requires docker, mssql-cli)
+e2e:
+	./scripts/e2e_test.sh

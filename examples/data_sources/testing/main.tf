@@ -2,7 +2,7 @@ terraform {
   required_providers {
     mssql = {
       source  = "muecahit94/mssql"
-      version = "~> 1.0"
+      version = "~> 0.0"
     }
   }
 }
@@ -13,7 +13,7 @@ provider "mssql" {
 
   sql_auth {
     username = "sa"
-    password = var.sa_password
+    password = "P@ssw0rd123!"
   }
 }
 
