@@ -167,7 +167,7 @@ phase_setup() {
 phase_complete_example() {
     log_header "PHASE 2: COMPLETE EXAMPLE"
     
-    local example_dir="$PROJECT_ROOT/examples/complete"
+    local example_dir="$PROJECT_ROOT/examples/testing/complete"
     cd "$example_dir"
     
     # Clean up any existing state
@@ -263,7 +263,7 @@ EOF
 phase_data_sources() {
     log_header "PHASE 3: DATA SOURCES EXAMPLE"
     
-    local example_dir="$PROJECT_ROOT/examples/data_sources/testing"
+    local example_dir="$PROJECT_ROOT/examples/testing/data_sources"
     cd "$example_dir"
     
     # Clean up any existing state
@@ -295,7 +295,7 @@ phase_data_sources() {
 phase_provider_example() {
     log_header "PHASE 4: PROVIDER EXAMPLE"
     
-    local example_dir="$PROJECT_ROOT/examples/provider"
+    local example_dir="$PROJECT_ROOT/examples/testing/provider"
     cd "$example_dir"
     
     # Clean up any existing state
@@ -338,7 +338,7 @@ phase_provider_example() {
 phase_drift_recovery() {
     log_header "PHASE 5: DRIFT RECOVERY TESTS"
     
-    local example_dir="$PROJECT_ROOT/examples/complete"
+    local example_dir="$PROJECT_ROOT/examples/testing/complete"
     cd "$example_dir"
     
     # Test 1: Delete role and recover
@@ -400,6 +400,8 @@ phase_drift_recovery() {
             record_test "Drift Recovery: Login re-enable" "FAIL"
         fi
     else
+        echo "Terraform apply failed:"
+        echo "$apply_output"
         record_test "Drift Recovery: Login re-enable" "FAIL"
     fi
     
@@ -412,7 +414,7 @@ phase_cleanup() {
     
     # Destroy complete example
     log_info "Destroying complete example..."
-    cd "$PROJECT_ROOT/examples/complete"
+    cd "$PROJECT_ROOT/examples/testing/complete"
     terraform destroy -auto-approve 2>&1 | tail -3 || true
     
     # Stop Docker
@@ -422,13 +424,13 @@ phase_cleanup() {
     
     # Clean up all state files
     log_info "Cleaning up state files..."
-    cleanup_state_files "$PROJECT_ROOT/examples/complete"
-    cleanup_state_files "$PROJECT_ROOT/examples/data_sources"
-    cleanup_state_files "$PROJECT_ROOT/examples/provider"
+    cleanup_state_files "$PROJECT_ROOT/examples/testing/complete"
+    cleanup_state_files "$PROJECT_ROOT/examples/testing/data_sources"
+    cleanup_state_files "$PROJECT_ROOT/examples/testing/provider"
     
     # Clean up tfvars
-    rm -f "$PROJECT_ROOT/examples/complete/terraform.tfvars"
-    rm -f "$PROJECT_ROOT/examples/data_sources/terraform.tfvars"
+    rm -f "$PROJECT_ROOT/examples/testing/complete/terraform.tfvars"
+    rm -f "$PROJECT_ROOT/examples/testing/data_sources/terraform.tfvars"
     
     # Clean up provider config
     cleanup_provider_config
