@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.0.4...v1.1.0) (2026-01-01)
+
+
+### Features
+
+* Add and update data source docs and enhance existing resource/data source docs ([683b50c](https://github.com/muecahit94/terraform-provider-mssql/commit/683b50c24ee073d6bc93dbd3855d9cbf20f5fdb9))
+
 ## [1.0.4](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.0.3...v1.0.4) (2026-01-01)
 
 
