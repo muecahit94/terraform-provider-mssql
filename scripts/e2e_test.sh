@@ -104,10 +104,10 @@ cleanup_state_files() {
 
 setup_local_provider() {
     log_info "Setting up local provider override..."
-    
+
     # Create a temporary .terraformrc for this test session
     export TF_CLI_CONFIG_FILE="$PROJECT_ROOT/.terraformrc.test"
-    
+
     cat > "$TF_CLI_CONFIG_FILE" <<EOF
 provider_installation {
   dev_overrides {
@@ -116,7 +116,7 @@ provider_installation {
   direct {}
 }
 EOF
-    
+
     log_info "Using local provider from: $PROJECT_ROOT"
 }
 
@@ -127,9 +127,9 @@ cleanup_provider_config() {
 # Phase 1: Setup
 phase_setup() {
     log_header "PHASE 1: SETUP"
-    
+
     cd "$PROJECT_ROOT"
-    
+
     # Start Docker
     log_info "Starting Docker Compose..."
     if docker compose up -d; then
@@ -138,7 +138,7 @@ phase_setup() {
         record_test "Docker Compose Start" "FAIL"
         return 1
     fi
-    
+
     # Build provider
     log_info "Building Terraform provider..."
     if go build -o terraform-provider-mssql . 2>&1; then
@@ -147,11 +147,11 @@ phase_setup() {
         record_test "Provider Build" "FAIL"
         return 1
     fi
-    
+
     # Setup local provider override
     setup_local_provider
     record_test "Local Provider Setup" "PASS"
-    
+
     # Wait for SQL Server
     if wait_for_sql; then
         record_test "SQL Server Ready" "PASS"
@@ -159,20 +159,20 @@ phase_setup() {
         record_test "SQL Server Ready" "FAIL"
         return 1
     fi
-    
+
     return 0
 }
 
 # Phase 2: Complete Example
 phase_complete_example() {
     log_header "PHASE 2: COMPLETE EXAMPLE"
-    
+
     local example_dir="$PROJECT_ROOT/examples/testing/complete"
     cd "$example_dir"
-    
+
     # Clean up any existing state
     cleanup_state_files "$example_dir"
-    
+
     # Create tfvars
     cat > terraform.tfvars <<EOF
 sql_hostname = "localhost"
@@ -181,7 +181,7 @@ sql_username = "sa"
 sql_password = "$SA_PASSWORD"
 app_password = "AppP@ssw0rd123!"
 EOF
-    
+
     log_info "Applying Terraform..."
     local apply_output
     apply_output=$(terraform apply -auto-approve 2>&1)
@@ -193,59 +193,59 @@ EOF
         log_warning "Apply output: $apply_output"
         return 1
     fi
-    
+
     # SQL Verifications
     log_info "Verifying resources via SQL..."
-    
+
     # Check database
     if run_sql "SELECT 1 FROM sys.databases WHERE name = 'application_db'" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Database exists" "PASS"
     else
         record_test "SQL Verify: Database exists" "FAIL"
     fi
-    
+
     # Check login
     if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'app_login'" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Login exists" "PASS"
     else
         record_test "SQL Verify: Login exists" "FAIL"
     fi
-    
+
     # Check user in database
     if run_sql "SELECT 1 FROM sys.database_principals WHERE name = 'app_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: User exists in database" "PASS"
     else
         record_test "SQL Verify: User exists in database" "FAIL"
     fi
-    
+
     # Check role
     if run_sql "SELECT 1 FROM sys.database_principals WHERE name = 'app_readers' AND type = 'R'" "application_db" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Role exists" "PASS"
     else
         record_test "SQL Verify: Role exists" "FAIL"
     fi
-    
+
     # Check schema
     if run_sql "SELECT 1 FROM sys.schemas WHERE name = 'app'" "application_db" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Schema exists" "PASS"
     else
         record_test "SQL Verify: Schema exists" "FAIL"
     fi
-    
+
     # Check role membership
     if run_sql "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'app_readers' AND m.name = 'app_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Role membership" "PASS"
     else
         record_test "SQL Verify: Role membership" "FAIL"
     fi
-    
+
     # Check permission
     if run_sql "SELECT 1 FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id WHERE pr.name = 'app_readers' AND p.permission_name = 'SELECT'" "application_db" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Permission granted" "PASS"
     else
         record_test "SQL Verify: Permission granted" "FAIL"
     fi
-    
+
     # Check test_user has SELECT on app schema with WITH GRANT OPTION (state = W)
     local test_user_perm=$(run_sql "SELECT state FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id JOIN sys.schemas s ON p.major_id = s.schema_id WHERE pr.name = 'test_user' AND s.name = 'app' AND p.permission_name = 'SELECT'" "application_db" 2>/dev/null)
     if echo "$test_user_perm" | grep -q "W"; then
@@ -254,7 +254,7 @@ EOF
         log_error "Expected test_user to have SELECT WITH GRANT OPTION (W)"
         record_test "SQL Verify: test_user schema permission" "FAIL"
     fi
-    
+
     # Check app_user owns the app schema
     local app_schema_owner=$(run_sql "SELECT dp.name FROM sys.schemas s JOIN sys.database_principals dp ON s.principal_id = dp.principal_id WHERE s.name = 'app'" "application_db" 2>/dev/null)
     if echo "$app_schema_owner" | grep -q "app_user"; then
@@ -263,7 +263,7 @@ EOF
         log_error "Expected app_user to own the app schema"
         record_test "SQL Verify: app_user schema owner" "FAIL"
     fi
-    
+
     # Check idempotency
     log_info "Checking idempotency..."
     local plan_output
@@ -273,20 +273,20 @@ EOF
     else
         record_test "Complete Example: Idempotency" "FAIL"
     fi
-    
+
     return 0
 }
 
 # Phase 3: Data Sources
 phase_data_sources() {
     log_header "PHASE 3: DATA SOURCES EXAMPLE"
-    
+
     local example_dir="$PROJECT_ROOT/examples/testing/data_sources"
     cd "$example_dir"
-    
+
     # Clean up any existing state
     cleanup_state_files "$example_dir"
-    
+
     log_info "Applying Terraform..."
     local apply_output
     apply_output=$(terraform apply -auto-approve 2>&1)
@@ -297,7 +297,7 @@ phase_data_sources() {
         record_test "Data Sources: terraform apply" "FAIL"
         return 1
     fi
-    
+
     # Verify outputs work
     log_info "Verifying data source outputs..."
     if terraform output 2>&1 | grep -q "databases"; then
@@ -305,20 +305,20 @@ phase_data_sources() {
     else
         record_test "Data Sources: Output verification" "FAIL"
     fi
-    
+
     return 0
 }
 
 # Phase 4: Provider Example
 phase_provider_example() {
     log_header "PHASE 4: PROVIDER EXAMPLE"
-    
+
     local example_dir="$PROJECT_ROOT/examples/testing/provider"
     cd "$example_dir"
-    
+
     # Clean up any existing state
     cleanup_state_files "$example_dir"
-    
+
     log_info "Applying Terraform..."
     local apply_output
     apply_output=$(terraform apply -auto-approve 2>&1)
@@ -329,7 +329,7 @@ phase_provider_example() {
         record_test "Provider Example: terraform apply" "FAIL"
         return 1
     fi
-    
+
     # Verify it worked by checking resources were created
     log_info "Verifying provider example resources..."
     if run_sql "SELECT 1 FROM sys.databases WHERE name = 'example_db'" | grep -v "Executed in" | grep "1" -q; then
@@ -337,7 +337,7 @@ phase_provider_example() {
     else
         record_test "Provider Example: Resources verified" "FAIL"
     fi
-    
+
     # Destroy
     log_info "Destroying provider example..."
     local destroy_output
@@ -348,21 +348,21 @@ phase_provider_example() {
     else
         record_test "Provider Example: terraform destroy" "FAIL"
     fi
-    
+
     return 0
 }
 
 # Phase 5: Drift Recovery
 phase_drift_recovery() {
     log_header "PHASE 5: DRIFT RECOVERY TESTS"
-    
+
     local example_dir="$PROJECT_ROOT/examples/testing/complete"
     cd "$example_dir"
-    
+
     # Test 1: Delete role and recover
     log_info "Test: Role deletion recovery..."
     run_sql "ALTER ROLE app_readers DROP MEMBER app_user; DROP ROLE app_readers;" "application_db" >/dev/null 2>&1 || true
-    
+
     local apply_output
     apply_output=$(terraform apply -auto-approve 2>&1)
     if echo "$apply_output" | grep -q "Apply complete"; then
@@ -375,11 +375,11 @@ phase_drift_recovery() {
     else
         record_test "Drift Recovery: Role recreation" "FAIL"
     fi
-    
+
     # Test 2: Delete user and recover
     log_info "Test: User deletion recovery..."
     run_sql "DROP SCHEMA app; DROP USER app_user;" "application_db" >/dev/null 2>&1 || true
-    
+
     apply_output=$(terraform apply -auto-approve 2>&1)
     if echo "$apply_output" | grep -q "Apply complete"; then
         if run_sql "SELECT 1 FROM sys.database_principals WHERE name = 'app_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
@@ -390,11 +390,11 @@ phase_drift_recovery() {
     else
         record_test "Drift Recovery: User recreation" "FAIL"
     fi
-    
+
     # Test 3: Revoke permission and recover
     log_info "Test: Permission recovery..."
     run_sql "REVOKE SELECT FROM app_readers" "application_db" >/dev/null 2>&1 || true
-    
+
     apply_output=$(terraform apply -auto-approve 2>&1)
     if echo "$apply_output" | grep -q "Apply complete"; then
         if run_sql "SELECT 1 FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id WHERE pr.name = 'app_readers' AND p.permission_name = 'SELECT'" "application_db" | grep -v "Executed in" | grep "1" -q; then
@@ -405,11 +405,11 @@ phase_drift_recovery() {
     else
         record_test "Drift Recovery: Permission restoration" "FAIL"
     fi
-    
+
     # Test 4: Disable login and recover
     log_info "Test: Login modification recovery..."
     run_sql "ALTER LOGIN app_login DISABLE" >/dev/null 2>&1 || true
-    
+
     apply_output=$(terraform apply -auto-approve 2>&1)
     if echo "$apply_output" | grep -q "Apply complete"; then
         if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'app_login' AND is_disabled = 0" | grep -v "Executed in" | grep "1" -q; then
@@ -422,13 +422,13 @@ phase_drift_recovery() {
         echo "$apply_output"
         record_test "Drift Recovery: Login re-enable" "FAIL"
     fi
-    
+
     # Test 5: Schema permission drift recovery
     log_info "Test: Schema permission drift recovery..."
-    
+
     # Revoke the test_user's SELECT permission on the app schema
     run_sql "REVOKE SELECT ON SCHEMA::app FROM test_user CASCADE" "application_db" >/dev/null 2>&1 || true
-    
+
     apply_output=$(terraform apply -auto-approve 2>&1)
     if echo "$apply_output" | grep -q "Apply complete"; then
         # Verify the permission was restored with WITH GRANT OPTION
@@ -441,7 +441,7 @@ phase_drift_recovery() {
     else
         record_test "Drift Recovery: Schema permission restoration" "FAIL"
     fi
-    
+
     return 0
 }
 
@@ -449,45 +449,45 @@ phase_drift_recovery() {
 # Phase 6: Cleanup
 phase_cleanup() {
     log_header "PHASE 6: CLEANUP"
-    
+
     # Destroy complete example
     log_info "Destroying complete example..."
     cd "$PROJECT_ROOT/examples/testing/complete"
     terraform destroy -auto-approve 2>&1 | tail -3 || true
-    
+
     # Stop Docker
     log_info "Stopping Docker Compose..."
     cd "$PROJECT_ROOT"
     docker compose down 2>&1 || true
-    
+
     # Clean up all state files
     log_info "Cleaning up state files..."
     cleanup_state_files "$PROJECT_ROOT/examples/testing/complete"
     cleanup_state_files "$PROJECT_ROOT/examples/testing/data_sources"
     cleanup_state_files "$PROJECT_ROOT/examples/testing/provider"
-    
+
     # Clean up tfvars
     rm -f "$PROJECT_ROOT/examples/testing/complete/terraform.tfvars"
     rm -f "$PROJECT_ROOT/examples/testing/data_sources/terraform.tfvars"
-    
+
     # Clean up provider config
     cleanup_provider_config
-    
+
     record_test "Cleanup" "PASS"
-    
+
     return 0
 }
 
 # Phase 7: Summary
 phase_summary() {
     log_header "TEST SUMMARY"
-    
+
     echo ""
     echo -e "Total Tests: ${BLUE}$TOTAL_TESTS${NC}"
     echo -e "Passed:      ${GREEN}$PASSED_TESTS${NC}"
     echo -e "Failed:      ${RED}$FAILED_TESTS${NC}"
     echo ""
-    
+
     echo "Detailed Results:"
     echo "-----------------"
     local i=0
@@ -502,7 +502,7 @@ phase_summary() {
         i=$((i + 1))
     done
     echo ""
-    
+
     if [[ $FAILED_TESTS -eq 0 ]]; then
         echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
         echo -e "${GREEN} ALL TESTS PASSED!${NC}"
@@ -521,10 +521,10 @@ main() {
     log_header "MSSQL TERRAFORM PROVIDER E2E TEST SUITE"
     echo "Started at: $(date)"
     echo ""
-    
+
     # Trap to ensure cleanup on exit
     trap 'cleanup_provider_config' EXIT
-    
+
     # Run all phases
     phase_setup || { phase_cleanup; phase_summary; exit 1; }
     phase_complete_example || true
@@ -532,7 +532,7 @@ main() {
     phase_provider_example || true
     phase_drift_recovery || true
     phase_cleanup
-    
+
     # Print summary
     phase_summary
     exit $?

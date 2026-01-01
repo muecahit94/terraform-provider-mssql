@@ -22,9 +22,9 @@ type User struct {
 // GetUser retrieves a user from a specific database.
 func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*User, error) {
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
@@ -60,9 +60,9 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 // GetUserByID retrieves a user by principal ID from a specific database.
 func (c *Client) GetUserByID(ctx context.Context, databaseName string, principalID int) (*User, error) {
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
@@ -110,9 +110,9 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 	}
 
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,

@@ -16,7 +16,7 @@ jobs:
     name: Acceptance Tests
     runs-on: ubuntu-latest
     if: github.event.inputs.run_tests == 'true'
-    
+
     services:
       mssql:
         image: mcr.microsoft.com/mssql/server:2022-latest

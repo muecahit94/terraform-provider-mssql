@@ -33,7 +33,7 @@ type DatabasePermission struct {
 // GetDatabasePermission retrieves a specific database permission.
 func (c *Client) GetDatabasePermission(ctx context.Context, databaseName, principalName, permission string) (*DatabasePermission, error) {
 	query := `
-		SELECT 
+		SELECT
 			dp.principal_id,
 			dp.name,
 			perm.permission_name,
@@ -42,8 +42,8 @@ func (c *Client) GetDatabasePermission(ctx context.Context, databaseName, princi
 			CASE WHEN perm.state = 'W' THEN 1 ELSE 0 END
 		FROM sys.database_permissions perm
 		INNER JOIN sys.database_principals dp ON perm.grantee_principal_id = dp.principal_id
-		WHERE dp.name = @p1 
-			AND perm.permission_name = @p2 
+		WHERE dp.name = @p1
+			AND perm.permission_name = @p2
 			AND perm.class = 0`
 
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalName, strings.ToUpper(permission))
@@ -85,7 +85,7 @@ func (c *Client) ListDatabasePermissions(ctx context.Context, databaseName, prin
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			dp.principal_id,
 			dp.name,
 			perm.permission_name,
@@ -162,7 +162,7 @@ type SchemaPermission struct {
 // GetSchemaPermission retrieves a specific schema permission.
 func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) (*SchemaPermission, error) {
 	query := `
-		SELECT 
+		SELECT
 			dp.principal_id,
 			dp.name,
 			perm.permission_name,
@@ -173,8 +173,8 @@ func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaNa
 		FROM sys.database_permissions perm
 		INNER JOIN sys.database_principals dp ON perm.grantee_principal_id = dp.principal_id
 		INNER JOIN sys.schemas s ON perm.major_id = s.schema_id
-		WHERE dp.name = @p1 
-			AND perm.permission_name = @p2 
+		WHERE dp.name = @p1
+			AND perm.permission_name = @p2
 			AND s.name = @p3
 			AND perm.class = 3`
 
@@ -203,7 +203,7 @@ func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaNa
 	// Permission not found. Check if the principal is the owner of the schema.
 	// If so, they implicitly have the permission.
 	ownerQuery := `
-		SELECT 
+		SELECT
 			dp.principal_id,
 			dp.name
 		FROM sys.schemas s
@@ -254,7 +254,7 @@ func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schema
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			dp.principal_id,
 			dp.name,
 			perm.permission_name,
@@ -333,7 +333,7 @@ type ServerPermission struct {
 // GetServerPermission retrieves a specific server permission.
 func (c *Client) GetServerPermission(ctx context.Context, principalName, permission string) (*ServerPermission, error) {
 	query := `
-		SELECT 
+		SELECT
 			sp.principal_id,
 			sp.name,
 			perm.permission_name,
@@ -341,8 +341,8 @@ func (c *Client) GetServerPermission(ctx context.Context, principalName, permiss
 			CASE WHEN perm.state = 'W' THEN 1 ELSE 0 END
 		FROM sys.server_permissions perm
 		INNER JOIN sys.server_principals sp ON perm.grantee_principal_id = sp.principal_id
-		WHERE sp.name = @p1 
-			AND perm.permission_name = @p2 
+		WHERE sp.name = @p1
+			AND perm.permission_name = @p2
 			AND perm.class = 100`
 	row := c.QueryRowContext(ctx, query, principalName, strings.ToUpper(permission))
 
@@ -367,7 +367,7 @@ func (c *Client) GetServerPermission(ctx context.Context, principalName, permiss
 // ListServerPermissions retrieves all server permissions for a principal.
 func (c *Client) ListServerPermissions(ctx context.Context, principalName string) ([]ServerPermission, error) {
 	query := `
-		SELECT 
+		SELECT
 			sp.principal_id,
 			sp.name,
 			perm.permission_name,

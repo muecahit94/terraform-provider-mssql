@@ -22,9 +22,9 @@ type DatabaseRole struct {
 // GetDatabaseRole retrieves a database role by name.
 func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName string) (*DatabaseRole, error) {
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(owner.name, ''),
 			dp.is_fixed_role,
@@ -60,9 +60,9 @@ func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName str
 // GetDatabaseRoleByID retrieves a database role by principal ID.
 func (c *Client) GetDatabaseRoleByID(ctx context.Context, databaseName string, principalID int) (*DatabaseRole, error) {
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(owner.name, ''),
 			dp.is_fixed_role,
@@ -110,9 +110,9 @@ func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]
 	}
 
 	query := `
-		SELECT 
-			dp.principal_id, 
-			dp.name, 
+		SELECT
+			dp.principal_id,
+			dp.name,
 			DB_ID() as database_id,
 			ISNULL(owner.name, ''),
 			dp.is_fixed_role,
@@ -226,7 +226,7 @@ type DatabaseRoleMember struct {
 // GetDatabaseRoleMember retrieves a role membership.
 func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) (*DatabaseRoleMember, error) {
 	query := `
-		SELECT 
+		SELECT
 			role_dp.principal_id,
 			role_dp.name,
 			member_dp.principal_id,
@@ -293,8 +293,8 @@ type ServerRole struct {
 // GetServerRole retrieves a server role by name.
 func (c *Client) GetServerRole(ctx context.Context, roleName string) (*ServerRole, error) {
 	query := `
-		SELECT 
-			sp.principal_id, 
+		SELECT
+			sp.principal_id,
 			sp.name,
 			ISNULL(owner.name, ''),
 			sp.is_fixed_role
@@ -323,8 +323,8 @@ func (c *Client) GetServerRole(ctx context.Context, roleName string) (*ServerRol
 // GetServerRoleByID retrieves a server role by principal ID.
 func (c *Client) GetServerRoleByID(ctx context.Context, principalID int) (*ServerRole, error) {
 	query := `
-		SELECT 
-			sp.principal_id, 
+		SELECT
+			sp.principal_id,
 			sp.name,
 			ISNULL(owner.name, ''),
 			sp.is_fixed_role
@@ -353,8 +353,8 @@ func (c *Client) GetServerRoleByID(ctx context.Context, principalID int) (*Serve
 // ListServerRoles retrieves all server roles.
 func (c *Client) ListServerRoles(ctx context.Context) ([]ServerRole, error) {
 	query := `
-		SELECT 
-			sp.principal_id, 
+		SELECT
+			sp.principal_id,
 			sp.name,
 			ISNULL(owner.name, ''),
 			sp.is_fixed_role
@@ -428,7 +428,7 @@ type ServerRoleMember struct {
 // GetServerRoleMember retrieves a server role membership.
 func (c *Client) GetServerRoleMember(ctx context.Context, roleName, memberName string) (*ServerRoleMember, error) {
 	query := `
-		SELECT 
+		SELECT
 			role_sp.principal_id,
 			role_sp.name,
 			member_sp.principal_id,

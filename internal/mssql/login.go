@@ -23,15 +23,15 @@ type SQLLogin struct {
 // GetSQLLogin retrieves a SQL login by name.
 func (c *Client) GetSQLLogin(ctx context.Context, name string) (*SQLLogin, error) {
 	query := `
-		SELECT 
-			principal_id, 
-			name, 
+		SELECT
+			principal_id,
+			name,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
 			ISNULL(is_policy_checked, 0),
 			is_disabled
-		FROM sys.sql_logins 
+		FROM sys.sql_logins
 		WHERE name = @p1`
 	row := c.QueryRowContext(ctx, query, name)
 
@@ -58,15 +58,15 @@ func (c *Client) GetSQLLogin(ctx context.Context, name string) (*SQLLogin, error
 // GetSQLLoginByID retrieves a SQL login by principal ID.
 func (c *Client) GetSQLLoginByID(ctx context.Context, id int) (*SQLLogin, error) {
 	query := `
-		SELECT 
-			principal_id, 
-			name, 
+		SELECT
+			principal_id,
+			name,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
 			ISNULL(is_policy_checked, 0),
 			is_disabled
-		FROM sys.sql_logins 
+		FROM sys.sql_logins
 		WHERE principal_id = @p1`
 	row := c.QueryRowContext(ctx, query, id)
 
@@ -93,15 +93,15 @@ func (c *Client) GetSQLLoginByID(ctx context.Context, id int) (*SQLLogin, error)
 // ListSQLLogins retrieves all SQL logins.
 func (c *Client) ListSQLLogins(ctx context.Context) ([]SQLLogin, error) {
 	query := `
-		SELECT 
-			principal_id, 
-			name, 
+		SELECT
+			principal_id,
+			name,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
 			ISNULL(is_policy_checked, 0),
 			is_disabled
-		FROM sys.sql_logins 
+		FROM sys.sql_logins
 		ORDER BY name`
 	rows, err := c.QueryContext(ctx, query)
 	if err != nil {

@@ -20,9 +20,9 @@ type Schema struct {
 // GetSchema retrieves a schema by name.
 func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string) (*Schema, error) {
 	query := `
-		SELECT 
-			s.schema_id, 
-			s.name, 
+		SELECT
+			s.schema_id,
+			s.name,
 			dp.name as owner_name,
 			DB_ID()
 		FROM sys.schemas s
@@ -54,9 +54,9 @@ func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string)
 // GetSchemaByID retrieves a schema by ID.
 func (c *Client) GetSchemaByID(ctx context.Context, databaseName string, schemaID int) (*Schema, error) {
 	query := `
-		SELECT 
-			s.schema_id, 
-			s.name, 
+		SELECT
+			s.schema_id,
+			s.name,
 			dp.name as owner_name,
 			DB_ID()
 		FROM sys.schemas s
@@ -100,9 +100,9 @@ func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema
 	}
 
 	query := `
-		SELECT 
-			s.schema_id, 
-			s.name, 
+		SELECT
+			s.schema_id,
+			s.name,
 			dp.name as owner_name,
 			DB_ID()
 		FROM sys.schemas s

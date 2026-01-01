@@ -140,7 +140,6 @@ func (r *SchemaPermissionResource) Read(ctx context.Context, req resource.ReadRe
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-
 func (r *SchemaPermissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data, state SchemaPermissionResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
