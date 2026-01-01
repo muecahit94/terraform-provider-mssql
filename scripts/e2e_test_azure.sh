@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # E2E Test Suite for Azure AD Example
 # This script deploys infrastructure, validates MSSQL resources, and cleans up.
-# Requires: bash 4.0+, terraform, go, az-cli (logged in), sqlcmd or mssql-cli
+# Requires: bash 4.0+, terraform, go, az-cli (logged in), sqlcmd/mssql-cli
+#
+# Environment Variables:
+#   SKIP_INFRA_DESTROY=1  - Skip infrastructure destruction (useful for debugging)
 
 set -e
 
@@ -9,6 +12,7 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
@@ -25,10 +29,22 @@ TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 
+# Captured infrastructure outputs (global for cleanup trap)
+SQL_HOST=""
+DB_NAME=""
+MI_NAME=""
+MI_OBJECT_ID=""
+SQL_USER=""
+SQL_PASSWORD=""
+AZURE_SUBSCRIPTION_ID=""
+AZURE_TENANT_ID=""
+
 # Helper functions
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[PASS]${NC} $1"; }
 log_error() { echo -e "${RED}[FAIL]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+
 log_record() {
     local name="$1"
     local status="$2"
@@ -38,10 +54,20 @@ log_record() {
     if [ "$status" == "PASS" ]; then
         ((PASSED_TESTS++))
         log_success "$name"
+    elif [ "$status" == "SKIP" ]; then
+        # Skipped tests don't count as failures
+        echo -e "${YELLOW}[SKIP]${NC} $name"
     else
         ((FAILED_TESTS++))
         log_error "$name"
     fi
+}
+
+phase_header() {
+    echo ""
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE} $1${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 }
 
 setup_local_provider() {
@@ -62,10 +88,27 @@ cleanup_provider_config() {
     rm -f "$PROJECT_ROOT/.terraformrc.test"
 }
 
-cleanup_state() {
-    log_info "Cleaning up state files..."
-    rm -rf "$INFRA_DIR/.terraform" "$INFRA_DIR/terraform.tfstate"* "$INFRA_DIR/.terraform.lock.hcl"
-    rm -rf "$RESOURCES_DIR/.terraform" "$RESOURCES_DIR/terraform.tfstate"* "$RESOURCES_DIR/.terraform.lock.hcl"
+cleanup_all() {
+    log_warn "Performing emergency cleanup..."
+    cleanup_provider_config
+
+    # Try to destroy resources if we have the variables
+    if [ -n "$SQL_HOST" ]; then
+        cd "$RESOURCES_DIR" 2>/dev/null || true
+        terraform destroy -auto-approve \
+            -var="sql_hostname=$SQL_HOST" \
+            -var="database_name=$DB_NAME" \
+            -var="mi_name=$MI_NAME" \
+            -var="mi_object_id=$MI_OBJECT_ID" \
+            -var="azure_tenant_id=$AZURE_TENANT_ID" 2>/dev/null || true
+    fi
+
+    if [ -n "$AZURE_SUBSCRIPTION_ID" ] && [ -z "$SKIP_INFRA_DESTROY" ]; then
+        cd "$INFRA_DIR" 2>/dev/null || true
+        terraform destroy -auto-approve -var="subscription_id=$AZURE_SUBSCRIPTION_ID" 2>/dev/null || true
+    elif [ -n "$SKIP_INFRA_DESTROY" ]; then
+        log_warn "SKIP_INFRA_DESTROY is set - infrastructure will NOT be destroyed"
+    fi
 }
 
 run_sql() {
@@ -75,21 +118,17 @@ run_sql() {
     local db="$4"
     local query="$5"
 
-    # Try mssql-cli (or mssql) first, then sqlcmd
-    if command -v mssql-cli &> /dev/null; then
-        mssql-cli -S "$host" -U "$user" -P "$password" -d "$db" -Q "$query"
-    elif command -v mssql &> /dev/null; then
-        mssql -S "$host" -U "$user" -P "$password" -d "$db" -Q "$query"
-    elif command -v sqlcmd &> /dev/null; then
-        # mssql-tools or mssql-tools18
-        # -C TrustServerCertificate
-        sqlcmd -S "$host" -U "$user" -P "$password" -d "$db" -Q "$query" -C
+    # go-sqlcmd (uses SQLCMDPASSWORD env var)
+    if command -v sqlcmd &> /dev/null; then
+        SQLCMDPASSWORD="$password" sqlcmd -S "$host" -U "$user" -d "$db" -Q "$query" -C 2>/dev/null
+    # mssql-cli from Microsoft (Python based)
+    elif command -v mssql-cli &> /dev/null; then
+        mssql-cli -S "$host" -U "$user" -P "$password" -d "$db" -Q "$query" 2>/dev/null
     else
-        echo "Error: Neither mssql-cli, mssql, nor sqlcmd found" >&2
+        echo "Error: No SQL CLI tool found (sqlcmd or mssql-cli)" >&2
         return 1
     fi
 }
-
 
 phase_summary() {
     echo ""
@@ -107,6 +146,8 @@ phase_summary() {
     for i in "${!TEST_NAMES[@]}"; do
         if [ "${TEST_STATUSES[$i]}" == "PASS" ]; then
             echo -e "  ${GREEN}✓${NC} ${TEST_NAMES[$i]}"
+        elif [ "${TEST_STATUSES[$i]}" == "SKIP" ]; then
+            echo -e "  ${YELLOW}○${NC} ${TEST_NAMES[$i]} (skipped)"
         else
             echo -e "  ${RED}✗${NC} ${TEST_NAMES[$i]}"
         fi
@@ -114,7 +155,9 @@ phase_summary() {
     echo ""
 
     if [ $FAILED_TESTS -eq 0 ]; then
-        echo -e "${GREEN}ALL TESTS PASSED!${NC}"
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${GREEN} ALL TESTS PASSED!${NC}"
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
         return 0
     else
         echo -e "${RED}SOME TESTS FAILED!${NC}"
@@ -124,9 +167,9 @@ phase_summary() {
 
 # Main execution
 main() {
-    log_info "Starting Azure AD E2E Test Sequence"
+    phase_header "AZURE AD E2E TEST SUITE"
 
-    # specific: verify az login
+    # Verify az login
     if ! az account show >/dev/null 2>&1; then
         log_error "Please run 'az login' before running this script."
         exit 1
@@ -140,10 +183,15 @@ main() {
     echo "  Subscription ID: $AZURE_SUBSCRIPTION_ID"
     echo "  Tenant ID:       $AZURE_TENANT_ID"
 
-    # Trap for cleanup
+    # Trap for cleanup on error
+    trap 'cleanup_all' ERR
     trap 'cleanup_provider_config' EXIT
 
-    # Phase 1: Build Provider
+    # =========================================================================
+    # PHASE 1: BUILD PROVIDER
+    # =========================================================================
+    phase_header "PHASE 1: BUILD PROVIDER"
+
     log_info "Building Terraform provider..."
     cd "$PROJECT_ROOT"
     if go build -o terraform-provider-mssql .; then
@@ -155,8 +203,12 @@ main() {
     setup_local_provider
     log_record "Local Provider Setup" "PASS"
 
-    # Phase 2: Deploy Infrastructure
-    log_info "Deploying Infrastructure..."
+    # =========================================================================
+    # PHASE 2: DEPLOY INFRASTRUCTURE
+    # =========================================================================
+    phase_header "PHASE 2: DEPLOY INFRASTRUCTURE"
+
+    log_info "Deploying Azure Infrastructure..."
     cd "$INFRA_DIR"
     terraform init >/dev/null
 
@@ -180,17 +232,19 @@ main() {
     echo "  DB:   $DB_NAME"
     echo "  MI:   $MI_NAME ($MI_OBJECT_ID)"
 
-    # Delay for Firewall Rule Propagation
+    # Wait for firewall rules to propagate
     log_info "Waiting 30 seconds for Firewall Rule propagation..."
     sleep 30
 
-    # Phase 3: Deploy MSSQL Resources
+    # =========================================================================
+    # PHASE 3: DEPLOY MSSQL RESOURCES
+    # =========================================================================
+    phase_header "PHASE 3: DEPLOY MSSQL RESOURCES"
+
     log_info "Deploying MSSQL Resources..."
     cd "$RESOURCES_DIR"
     terraform init >/dev/null
 
-    # We pass azure_tenant_id as it is a variable in mssql_resources usually.
-    # If not, it will just warn about unused var.
     if terraform apply -auto-approve \
         -var="sql_hostname=$SQL_HOST" \
         -var="database_name=$DB_NAME" \
@@ -200,43 +254,157 @@ main() {
         log_record "MSSQL Resources Deployment" "PASS"
     else
         log_record "MSSQL Resources Deployment" "FAIL"
-        # We continue to verification/cleanup even if apply failed to verify state/debug
     fi
 
-    # Verification (Phase 4)
+    # Idempotency check
+    log_info "Checking idempotency..."
+    if terraform plan -detailed-exitcode \
+        -var="sql_hostname=$SQL_HOST" \
+        -var="database_name=$DB_NAME" \
+        -var="mi_name=$MI_NAME" \
+        -var="mi_object_id=$MI_OBJECT_ID" \
+        -var="azure_tenant_id=$AZURE_TENANT_ID" >/dev/null 2>&1; then
+        log_record "MSSQL Resources: Idempotency" "PASS"
+    else
+        log_record "MSSQL Resources: Idempotency" "FAIL"
+    fi
+
+    # =========================================================================
+    # PHASE 4: VERIFICATION
+    # =========================================================================
+    phase_header "PHASE 4: VERIFICATION"
+
     log_info "Verifying resources via SQL..."
 
     # Check MI User creation
-    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" "SELECT 1 FROM sys.database_principals WHERE name = '$MI_NAME'" | grep -q "1"; then
-        log_record "SQL Verify: Managed Identity User Exists" "PASS"
+    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_principals WHERE name = '$MI_NAME'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: Managed Identity User" "PASS"
     else
-        log_record "SQL Verify: Managed Identity User Exists" "FAIL"
+        log_record "SQL Verify: Managed Identity User" "FAIL"
     fi
 
     # Check Role creation
-    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" "SELECT 1 FROM sys.database_principals WHERE name = 'managed_identity_role' AND type = 'R'" | grep -q "1"; then
-        log_record "SQL Verify: Role Exists" "PASS"
+    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_principals WHERE name = 'managed_identity_role' AND type = 'R'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: MI Role" "PASS"
     else
-         log_record "SQL Verify: Role Exists" "FAIL"
+        log_record "SQL Verify: MI Role" "FAIL"
     fi
 
-    # Check Permission creation (SELECT on Database)
-    # Checking if role has SELECT permission
-    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" "SELECT 1 FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id WHERE pr.name = 'managed_identity_role' AND p.permission_name = 'SELECT'" | grep -q "1"; then
-        log_record "SQL Verify: Permission Granted" "PASS"
+    # Check Permission granted to role
+    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id WHERE pr.name = 'managed_identity_role' AND p.permission_name = 'SELECT'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: MI Role Permission" "PASS"
     else
-        log_record "SQL Verify: Permission Granted" "FAIL"
+        log_record "SQL Verify: MI Role Permission" "FAIL"
     fi
 
     # Check Role Assignment (MI in Role)
-    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'managed_identity_role' AND m.name = '$MI_NAME'" | grep -q "1"; then
-        log_record "SQL Verify: Role Assignment" "PASS"
+    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'managed_identity_role' AND m.name = '$MI_NAME'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: MI Role Membership" "PASS"
     else
-        log_record "SQL Verify: Role Assignment" "FAIL"
+        log_record "SQL Verify: MI Role Membership" "FAIL"
     fi
 
-    # Phase 5: Cleanup
-    log_info "Cleaning Up..."
+    # Check developer_role exists
+    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_principals WHERE name = 'developer_role' AND type = 'R'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: Developer Role" "PASS"
+    else
+        log_record "SQL Verify: Developer Role" "FAIL"
+    fi
+
+    # =========================================================================
+    # PHASE 5: DRIFT RECOVERY TESTS
+    # =========================================================================
+    phase_header "PHASE 5: DRIFT RECOVERY TESTS"
+
+    cd "$RESOURCES_DIR"
+
+    # Helper to run terraform apply with all vars
+    tf_apply() {
+        terraform apply -auto-approve \
+            -var="sql_hostname=$SQL_HOST" \
+            -var="database_name=$DB_NAME" \
+            -var="mi_name=$MI_NAME" \
+            -var="mi_object_id=$MI_OBJECT_ID" \
+            -var="azure_tenant_id=$AZURE_TENANT_ID" 2>&1
+    }
+
+    # Test 1: Delete MI role and recover
+    log_info "Test: MI Role deletion recovery..."
+    run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "ALTER ROLE managed_identity_role DROP MEMBER [$MI_NAME]; DROP ROLE managed_identity_role;" >/dev/null 2>&1 || true
+
+    apply_output=$(tf_apply)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_principals WHERE name = 'managed_identity_role' AND type = 'R'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "Drift Recovery: MI Role recreation" "PASS"
+        else
+            log_record "Drift Recovery: MI Role recreation" "FAIL"
+        fi
+    else
+        log_record "Drift Recovery: MI Role recreation" "FAIL"
+    fi
+
+    # Test 2: Delete MI user and recover
+    log_info "Test: MI User deletion recovery..."
+    run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "DROP USER [$MI_NAME];" >/dev/null 2>&1 || true
+
+    apply_output=$(tf_apply)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_principals WHERE name = '$MI_NAME'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "Drift Recovery: MI User recreation" "PASS"
+        else
+            log_record "Drift Recovery: MI User recreation" "FAIL"
+        fi
+    else
+        log_record "Drift Recovery: MI User recreation" "FAIL"
+    fi
+
+    # Test 3: Revoke permission and recover
+    log_info "Test: Permission revocation recovery..."
+    run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "REVOKE SELECT FROM managed_identity_role;" >/dev/null 2>&1 || true
+
+    apply_output=$(tf_apply)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id WHERE pr.name = 'managed_identity_role' AND p.permission_name = 'SELECT'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "Drift Recovery: Permission restoration" "PASS"
+        else
+            log_record "Drift Recovery: Permission restoration" "FAIL"
+        fi
+    else
+        log_record "Drift Recovery: Permission restoration" "FAIL"
+    fi
+
+    # Test 4: Remove role membership and recover
+    log_info "Test: Role membership removal recovery..."
+    run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "ALTER ROLE managed_identity_role DROP MEMBER [$MI_NAME];" >/dev/null 2>&1 || true
+
+    apply_output=$(tf_apply)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'managed_identity_role' AND m.name = '$MI_NAME'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "Drift Recovery: Role membership restoration" "PASS"
+        else
+            log_record "Drift Recovery: Role membership restoration" "FAIL"
+        fi
+    else
+        log_record "Drift Recovery: Role membership restoration" "FAIL"
+    fi
+
+    # =========================================================================
+    # PHASE 6: CLEANUP
+    # =========================================================================
+    phase_header "PHASE 6: CLEANUP"
 
     log_info "Destroying MSSQL Resources..."
     cd "$RESOURCES_DIR"
@@ -246,19 +414,25 @@ main() {
         -var="mi_name=$MI_NAME" \
         -var="mi_object_id=$MI_OBJECT_ID" \
         -var="azure_tenant_id=$AZURE_TENANT_ID"; then
-         log_record "MSSQL Resources Destruction" "PASS"
+        log_record "MSSQL Resources Destruction" "PASS"
     else
-         log_record "MSSQL Resources Destruction" "FAIL"
+        log_record "MSSQL Resources Destruction" "FAIL"
     fi
 
-    log_info "Destroying Infrastructure..."
-    cd "$INFRA_DIR"
-    if terraform destroy -auto-approve -var="subscription_id=$AZURE_SUBSCRIPTION_ID"; then
-        log_record "Infrastructure Destruction" "PASS"
+    if [ -z "$SKIP_INFRA_DESTROY" ]; then
+        log_info "Destroying Infrastructure..."
+        cd "$INFRA_DIR"
+        if terraform destroy -auto-approve -var="subscription_id=$AZURE_SUBSCRIPTION_ID"; then
+            log_record "Infrastructure Destruction" "PASS"
+        else
+            log_record "Infrastructure Destruction" "FAIL"
+        fi
     else
-        log_record "Infrastructure Destruction" "FAIL"
+        log_warn "SKIP_INFRA_DESTROY is set - skipping infrastructure destruction"
+        log_record "Infrastructure Destruction" "SKIP"
     fi
 
+    # Show summary
     phase_summary
 }
 
