@@ -46,13 +46,25 @@ func (c *Client) GetDatabasePermission(ctx context.Context, databaseName, princi
 			AND perm.permission_name = @p2
 			AND perm.class = 0`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		row := db.QueryRowContext(ctx, query, principalName, strings.ToUpper(permission))
+		return scanDatabasePermission(row)
+	}
+
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalName, strings.ToUpper(permission))
 	if err != nil {
 		return nil, err
 	}
 
+	return scanDatabasePermission(row)
+}
+
+func scanDatabasePermission(row *sql.Row) (*DatabasePermission, error) {
 	var perm DatabasePermission
-	err = row.Scan(
+	err := row.Scan(
 		&perm.PrincipalID,
 		&perm.PrincipalName,
 		&perm.PermissionName,
@@ -66,24 +78,11 @@ func (c *Client) GetDatabasePermission(ctx context.Context, databaseName, princi
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database permission: %w", err)
 	}
-
 	return &perm, nil
 }
 
 // ListDatabasePermissions retrieves all database permissions for a principal.
 func (c *Client) ListDatabasePermissions(ctx context.Context, databaseName, principalName string) ([]DatabasePermission, error) {
-	// Get a dedicated connection from the pool
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
-		return nil, fmt.Errorf("failed to switch database context: %w", err)
-	}
-
 	query := `
 		SELECT
 			dp.principal_id,
@@ -97,12 +96,41 @@ func (c *Client) ListDatabasePermissions(ctx context.Context, databaseName, prin
 		WHERE dp.name = @p1 AND perm.class = 0
 		ORDER BY perm.permission_name`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		rows, err := db.QueryContext(ctx, query, principalName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list database permissions: %w", err)
+		}
+		defer rows.Close()
+		return scanDatabasePermissionsRows(rows)
+	}
+
+	// Fallback to existing logic
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
+	}
+
 	rows, err := conn.QueryContext(ctx, query, principalName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list database permissions: %w", err)
 	}
 	defer rows.Close()
 
+	return scanDatabasePermissionsRows(rows)
+}
+
+func scanDatabasePermissionsRows(rows *sql.Rows) ([]DatabasePermission, error) {
 	var perms []DatabasePermission
 	for rows.Next() {
 		var perm DatabasePermission
@@ -129,7 +157,16 @@ func (c *Client) GrantDatabasePermission(ctx context.Context, databaseName, prin
 		query += " WITH GRANT OPTION"
 	}
 
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to grant database permission: %w", err)
 	}
@@ -140,7 +177,17 @@ func (c *Client) GrantDatabasePermission(ctx context.Context, databaseName, prin
 // RevokeDatabasePermission revokes a database-level permission.
 func (c *Client) RevokeDatabasePermission(ctx context.Context, databaseName, principalName, permission string) error {
 	query := fmt.Sprintf("REVOKE %s FROM [%s]", strings.ToUpper(permission), principalName)
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to revoke database permission: %w", err)
 	}
@@ -161,6 +208,14 @@ type SchemaPermission struct {
 
 // GetSchemaPermission retrieves a specific schema permission.
 func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) (*SchemaPermission, error) {
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		return c.getSchemaPermissionWithDB(ctx, db, schemaName, principalName, permission)
+	}
+
+	// Fallback to existing logic
 	query := `
 		SELECT
 			dp.principal_id,
@@ -183,25 +238,15 @@ func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaNa
 		return nil, err
 	}
 
-	var perm SchemaPermission
-	err = row.Scan(
-		&perm.PrincipalID,
-		&perm.PrincipalName,
-		&perm.PermissionName,
-		&perm.StateDesc,
-		&perm.SchemaName,
-		&perm.DatabaseID,
-		&perm.WithGrantOption,
-	)
+	perm, err := scanSchemaPermission(row)
 	if err == nil {
-		return &perm, nil
+		return perm, nil
 	}
 	if err != sql.ErrNoRows {
-		return nil, fmt.Errorf("failed to get schema permission: %w", err)
+		return nil, err
 	}
 
 	// Permission not found. Check if the principal is the owner of the schema.
-	// If so, they implicitly have the permission.
 	ownerQuery := `
 		SELECT
 			dp.principal_id,
@@ -219,15 +264,86 @@ func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaNa
 	var ownerName string
 	err = ownerRow.Scan(&ownerID, &ownerName)
 	if err == sql.ErrNoRows {
-		// Not the owner, and no explicit permission found
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan schema owner: %w", err)
 	}
 
-	// Principal is the owner, so they have the permission implicitly.
-	// Return a virtual permission object.
+	return createImplicitSchemaPermission(ownerID, ownerName, permission, schemaName), nil
+}
+
+func (c *Client) getSchemaPermissionWithDB(ctx context.Context, db *sql.DB, schemaName, principalName, permission string) (*SchemaPermission, error) {
+	query := `
+		SELECT
+			dp.principal_id,
+			dp.name,
+			perm.permission_name,
+			perm.state_desc,
+			s.name,
+			DB_ID(),
+			CASE WHEN perm.state = 'W' THEN 1 ELSE 0 END
+		FROM sys.database_permissions perm
+		INNER JOIN sys.database_principals dp ON perm.grantee_principal_id = dp.principal_id
+		INNER JOIN sys.schemas s ON perm.major_id = s.schema_id
+		WHERE dp.name = @p1
+			AND perm.permission_name = @p2
+			AND s.name = @p3
+			AND perm.class = 3`
+
+	row := db.QueryRowContext(ctx, query, principalName, strings.ToUpper(permission), schemaName)
+	perm, err := scanSchemaPermission(row)
+	if err == nil {
+		return perm, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	// Permission not found. Check if the principal is the owner of the schema.
+	ownerQuery := `
+		SELECT
+			dp.principal_id,
+			dp.name
+		FROM sys.schemas s
+		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
+		WHERE s.name = @p1 AND dp.name = @p2`
+
+	ownerRow := db.QueryRowContext(ctx, ownerQuery, schemaName, principalName)
+	var ownerID int
+	var ownerName string
+	err = ownerRow.Scan(&ownerID, &ownerName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan schema owner: %w", err)
+	}
+
+	return createImplicitSchemaPermission(ownerID, ownerName, permission, schemaName), nil
+}
+
+func scanSchemaPermission(row *sql.Row) (*SchemaPermission, error) {
+	var perm SchemaPermission
+	err := row.Scan(
+		&perm.PrincipalID,
+		&perm.PrincipalName,
+		&perm.PermissionName,
+		&perm.StateDesc,
+		&perm.SchemaName,
+		&perm.DatabaseID,
+		&perm.WithGrantOption,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, err
+		}
+		return nil, fmt.Errorf("failed to get schema permission: %w", err)
+	}
+	return &perm, nil
+}
+
+func createImplicitSchemaPermission(ownerID int, ownerName, permission, schemaName string) *SchemaPermission {
 	return &SchemaPermission{
 		PrincipalID:     ownerID,
 		PrincipalName:   ownerName,
@@ -236,23 +352,11 @@ func (c *Client) GetSchemaPermission(ctx context.Context, databaseName, schemaNa
 		SchemaName:      schemaName,
 		DatabaseID:      0,    // Unknown/Irrelevant for virtual
 		WithGrantOption: true, // Owners effectively have grant option (CONTROL)
-	}, nil
+	}
 }
 
 // ListSchemaPermissions retrieves all schema permissions for a principal.
 func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schemaName, principalName string) ([]SchemaPermission, error) {
-	// Get a dedicated connection from the pool
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
-		return nil, fmt.Errorf("failed to switch database context: %w", err)
-	}
-
 	query := `
 		SELECT
 			dp.principal_id,
@@ -268,12 +372,87 @@ func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schema
 		WHERE dp.name = @p1 AND s.name = @p2 AND perm.class = 3
 		ORDER BY perm.permission_name`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		rows, err := db.QueryContext(ctx, query, principalName, schemaName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list schema permissions: %w", err)
+		}
+		defer rows.Close()
+		return scanSchemaPermissionsRows(rows)
+	}
+
+	// Fallback to existing logic
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
+	}
+
 	rows, err := conn.QueryContext(ctx, query, principalName, schemaName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list schema permissions: %w", err)
 	}
 	defer rows.Close()
 
+	return scanSchemaPermissionsRows(rows)
+}
+
+// GrantSchemaPermission grants a schema-level permission.
+func (c *Client) GrantSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string, withGrantOption bool) error {
+	query := fmt.Sprintf("GRANT %s ON SCHEMA::[%s] TO [%s]", strings.ToUpper(permission), schemaName, principalName)
+	if withGrantOption {
+		query += " WITH GRANT OPTION"
+	}
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
+	if err != nil {
+		return fmt.Errorf("failed to grant schema permission: %w", err)
+	}
+
+	return nil
+}
+
+// RevokeSchemaPermission revokes a schema-level permission.
+// CASCADE is used to also revoke any permissions that were granted by this principal.
+func (c *Client) RevokeSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) error {
+	query := fmt.Sprintf("REVOKE %s ON SCHEMA::[%s] FROM [%s] CASCADE", strings.ToUpper(permission), schemaName, principalName)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
+	if err != nil {
+		return fmt.Errorf("failed to revoke schema permission: %w", err)
+	}
+
+	return nil
+}
+
+func scanSchemaPermissionsRows(rows *sql.Rows) ([]SchemaPermission, error) {
 	var perms []SchemaPermission
 	for rows.Next() {
 		var perm SchemaPermission
@@ -292,33 +471,6 @@ func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schema
 	}
 
 	return perms, rows.Err()
-}
-
-// GrantSchemaPermission grants a schema-level permission.
-func (c *Client) GrantSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string, withGrantOption bool) error {
-	query := fmt.Sprintf("GRANT %s ON SCHEMA::[%s] TO [%s]", strings.ToUpper(permission), schemaName, principalName)
-	if withGrantOption {
-		query += " WITH GRANT OPTION"
-	}
-
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
-	if err != nil {
-		return fmt.Errorf("failed to grant schema permission: %w", err)
-	}
-
-	return nil
-}
-
-// RevokeSchemaPermission revokes a schema-level permission.
-// CASCADE is used to also revoke any permissions that were granted by this principal.
-func (c *Client) RevokeSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) error {
-	query := fmt.Sprintf("REVOKE %s ON SCHEMA::[%s] FROM [%s] CASCADE", strings.ToUpper(permission), schemaName, principalName)
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
-	if err != nil {
-		return fmt.Errorf("failed to revoke schema permission: %w", err)
-	}
-
-	return nil
 }
 
 // ServerPermission represents a server-level permission.

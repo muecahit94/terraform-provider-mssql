@@ -76,15 +76,15 @@ func (p *MSSQLProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 		},
 		Blocks: map[string]schema.Block{
 			"sql_auth": schema.SingleNestedBlock{
-				Description: "SQL authentication credentials.",
+				Description: "SQL authentication credentials. Either sql_auth or azure_auth must be provided.",
 				Attributes: map[string]schema.Attribute{
 					"username": schema.StringAttribute{
 						Description: "Username for SQL authentication.",
-						Required:    true,
+						Optional:    true,
 					},
 					"password": schema.StringAttribute{
 						Description: "Password for SQL authentication.",
-						Required:    true,
+						Optional:    true,
 						Sensitive:   true,
 					},
 				},

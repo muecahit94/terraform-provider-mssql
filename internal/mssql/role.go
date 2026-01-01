@@ -33,28 +33,20 @@ func (c *Client) GetDatabaseRole(ctx context.Context, databaseName, roleName str
 		LEFT JOIN sys.database_principals owner ON dp.owning_principal_id = owner.principal_id
 		WHERE dp.name = @p1 AND dp.type = 'R'`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		row := db.QueryRowContext(ctx, query, roleName)
+		return scanDatabaseRole(row)
+	}
+
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, roleName)
 	if err != nil {
 		return nil, err
 	}
 
-	var role DatabaseRole
-	err = row.Scan(
-		&role.PrincipalID,
-		&role.Name,
-		&role.DatabaseID,
-		&role.OwnerName,
-		&role.IsFixedRole,
-		&role.IsDatabaseRole,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database role: %w", err)
-	}
-
-	return &role, nil
+	return scanDatabaseRole(row)
 }
 
 // GetDatabaseRoleByID retrieves a database role by principal ID.
@@ -71,44 +63,24 @@ func (c *Client) GetDatabaseRoleByID(ctx context.Context, databaseName string, p
 		LEFT JOIN sys.database_principals owner ON dp.owning_principal_id = owner.principal_id
 		WHERE dp.principal_id = @p1 AND dp.type = 'R'`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		row := db.QueryRowContext(ctx, query, principalID)
+		return scanDatabaseRole(row)
+	}
+
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
 	if err != nil {
 		return nil, err
 	}
 
-	var role DatabaseRole
-	err = row.Scan(
-		&role.PrincipalID,
-		&role.Name,
-		&role.DatabaseID,
-		&role.OwnerName,
-		&role.IsFixedRole,
-		&role.IsDatabaseRole,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database role: %w", err)
-	}
-
-	return &role, nil
+	return scanDatabaseRole(row)
 }
 
 // ListDatabaseRoles retrieves all database roles.
 func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]DatabaseRole, error) {
-	// Get a dedicated connection from the pool
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
-		return nil, fmt.Errorf("failed to switch database context: %w", err)
-	}
-
 	query := `
 		SELECT
 			dp.principal_id,
@@ -122,12 +94,60 @@ func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]
 		WHERE dp.type = 'R'
 		ORDER BY dp.name`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list database roles: %w", err)
+		}
+		defer rows.Close()
+		return scanDatabaseRolesRows(rows)
+	}
+
+	// Fallback to existing logic
+	// Get a dedicated connection from the pool
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Switch to the target database
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
+	}
+
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list database roles: %w", err)
 	}
 	defer rows.Close()
 
+	return scanDatabaseRolesRows(rows)
+}
+
+func scanDatabaseRole(row *sql.Row) (*DatabaseRole, error) {
+	var role DatabaseRole
+	err := row.Scan(
+		&role.PrincipalID,
+		&role.Name,
+		&role.DatabaseID,
+		&role.OwnerName,
+		&role.IsFixedRole,
+		&role.IsDatabaseRole,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database role: %w", err)
+	}
+	return &role, nil
+}
+
+func scanDatabaseRolesRows(rows *sql.Rows) ([]DatabaseRole, error) {
 	var roles []DatabaseRole
 	for rows.Next() {
 		var role DatabaseRole
@@ -143,7 +163,6 @@ func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]
 		}
 		roles = append(roles, role)
 	}
-
 	return roles, rows.Err()
 }
 
@@ -161,9 +180,20 @@ func (c *Client) CreateDatabaseRole(ctx context.Context, opts CreateDatabaseRole
 		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
 	}
 
-	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create database role: %w", err)
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create database role: %w", err)
+		}
+	} else {
+		// Fallback to existing logic
+		err = c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create database role: %w", err)
+		}
 	}
 
 	role, err := c.GetDatabaseRole(ctx, opts.DatabaseName, opts.RoleName)
@@ -185,14 +215,25 @@ type UpdateDatabaseRoleOptions struct {
 
 // UpdateDatabaseRole updates an existing database role.
 func (c *Client) UpdateDatabaseRole(ctx context.Context, opts UpdateDatabaseRoleOptions) (*DatabaseRole, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
-	}
-
 	if opts.NewOwnerName != nil {
 		query := fmt.Sprintf("ALTER AUTHORIZATION ON ROLE::[%s] TO [%s]", opts.RoleName, *opts.NewOwnerName)
-		if _, err := c.ExecContext(ctx, query); err != nil {
-			return nil, fmt.Errorf("failed to update database role owner: %w", err)
+
+		// Try to get a direct connection to the database first (Azure SQL support)
+		db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
+		if err == nil {
+			defer db.Close()
+			_, err = db.ExecContext(ctx, query)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update database role owner: %w", err)
+			}
+		} else {
+			// Fallback to existing logic
+			if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
+				return nil, err
+			}
+			if _, err := c.ExecContext(ctx, query); err != nil {
+				return nil, fmt.Errorf("failed to update database role owner: %w", err)
+			}
 		}
 	}
 
@@ -201,12 +242,22 @@ func (c *Client) UpdateDatabaseRole(ctx context.Context, opts UpdateDatabaseRole
 
 // DropDatabaseRole drops a database role.
 func (c *Client) DropDatabaseRole(ctx context.Context, databaseName, roleName string) error {
+	query := fmt.Sprintf("DROP ROLE IF EXISTS [%s]", roleName)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
 	if err := c.UseDatabase(ctx, databaseName); err != nil {
 		return err
 	}
 
-	query := fmt.Sprintf("DROP ROLE IF EXISTS [%s]", roleName)
-	_, err := c.ExecContext(ctx, query)
+	_, err = c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop database role: %w", err)
 	}
@@ -237,13 +288,25 @@ func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 		INNER JOIN sys.database_principals member_dp ON drm.member_principal_id = member_dp.principal_id
 		WHERE role_dp.name = @p1 AND member_dp.name = @p2`
 
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		row := db.QueryRowContext(ctx, query, roleName, memberName)
+		return scanDatabaseRoleMember(row)
+	}
+
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, roleName, memberName)
 	if err != nil {
 		return nil, err
 	}
 
+	return scanDatabaseRoleMember(row)
+}
+
+func scanDatabaseRoleMember(row *sql.Row) (*DatabaseRoleMember, error) {
 	var member DatabaseRoleMember
-	err = row.Scan(
+	err := row.Scan(
 		&member.RoleID,
 		&member.RoleName,
 		&member.MemberID,
@@ -256,14 +319,23 @@ func (c *Client) GetDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database role member: %w", err)
 	}
-
 	return &member, nil
 }
 
 // AddDatabaseRoleMember adds a member to a database role.
 func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
 	query := fmt.Sprintf("ALTER ROLE [%s] ADD MEMBER [%s]", roleName, memberName)
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to add database role member: %w", err)
 	}
@@ -274,7 +346,17 @@ func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 // RemoveDatabaseRoleMember removes a member from a database role.
 func (c *Client) RemoveDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
 	query := fmt.Sprintf("ALTER ROLE [%s] DROP MEMBER [%s]", roleName, memberName)
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to remove database role member: %w", err)
 	}

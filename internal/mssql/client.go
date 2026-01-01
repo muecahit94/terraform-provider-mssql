@@ -23,6 +23,7 @@ type Client struct {
 	db       *sql.DB
 	hostname string
 	port     int
+	config   *Config // Store config for creating database-specific connections
 }
 
 // Config holds the configuration for connecting to SQL Server.
@@ -92,6 +93,7 @@ func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
 		db:       db,
 		hostname: cfg.Hostname,
 		port:     cfg.Port,
+		config:   cfg,
 	}, nil
 }
 
@@ -168,6 +170,114 @@ func connectWithAzureAuth(ctx context.Context, cfg *Config) (*sql.DB, error) {
 	}
 
 	db := sql.OpenDB(connector)
+	return db, nil
+}
+
+// connectWithSQLAuthToDatabase establishes a connection to a specific database using SQL authentication.
+func connectWithSQLAuthToDatabase(cfg *Config, databaseName string) (*sql.DB, error) {
+	query := url.Values{}
+	query.Add("app name", "terraform-provider-mssql")
+	query.Add("database", databaseName)
+
+	u := &url.URL{
+		Scheme:   "sqlserver",
+		User:     url.UserPassword(cfg.SQLAuth.Username, cfg.SQLAuth.Password),
+		Host:     fmt.Sprintf("%s:%d", cfg.Hostname, cfg.Port),
+		RawQuery: query.Encode(),
+	}
+
+	db, err := sql.Open("sqlserver", u.String())
+	if err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
+// connectWithAzureAuthToDatabase establishes a connection to a specific database using Azure AD authentication.
+func connectWithAzureAuthToDatabase(ctx context.Context, cfg *Config, databaseName string) (*sql.DB, error) {
+	var cred azcore.TokenCredential
+	var err error
+
+	// Check for environment variable override
+	clientID := cfg.AzureAuth.ClientID
+	clientSecret := cfg.AzureAuth.ClientSecret
+	tenantID := cfg.AzureAuth.TenantID
+
+	if clientID == "" {
+		clientID = os.Getenv("ARM_CLIENT_ID")
+	}
+	if clientSecret == "" {
+		clientSecret = os.Getenv("ARM_CLIENT_SECRET")
+	}
+	if tenantID == "" {
+		tenantID = os.Getenv("ARM_TENANT_ID")
+	}
+
+	if clientID != "" && clientSecret != "" && tenantID != "" {
+		// Use Service Principal authentication
+		cred, err = azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create client secret credential: %w", err)
+		}
+	} else {
+		// Use default Azure credential chain
+		cred, err = azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default Azure credential: %w", err)
+		}
+	}
+
+	// Get token for Azure SQL
+	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
+		Scopes: []string{"https://database.windows.net/.default"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Azure AD token: %w", err)
+	}
+
+	connector, err := mssqldb.NewAccessTokenConnector(
+		fmt.Sprintf("sqlserver://%s:%d?database=%s&app+name=terraform-provider-mssql", cfg.Hostname, cfg.Port, url.QueryEscape(databaseName)),
+		func() (string, error) {
+			return token.Token, nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access token connector: %w", err)
+	}
+
+	db := sql.OpenDB(connector)
+	return db, nil
+}
+
+// GetDatabaseConnection creates a new connection to a specific database.
+// This is needed for Azure SQL Database which doesn't support the USE statement.
+func (c *Client) GetDatabaseConnection(ctx context.Context, databaseName string) (*sql.DB, error) {
+	if c.config == nil {
+		return nil, fmt.Errorf("client config not available")
+	}
+
+	var db *sql.DB
+	var err error
+
+	if c.config.AzureAuth != nil {
+		db, err = connectWithAzureAuthToDatabase(ctx, c.config, databaseName)
+	} else if c.config.SQLAuth != nil {
+		db, err = connectWithSQLAuthToDatabase(c.config, databaseName)
+	} else {
+		return nil, fmt.Errorf("no authentication method configured")
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database %s: %w", databaseName, err)
+	}
+
+	// Verify connection
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database %s: %w", databaseName, err)
+	}
+
 	return db, nil
 }
 

@@ -6,8 +6,43 @@ package mssql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
+
+// guidToSID converts an Azure AD Object ID (GUID) to the binary SID format required by SQL Server.
+// For example: "cbb9c7db-2777-47b7-8954-0269ae3dc553" -> "0xDBC7B9CB7727B74789540269AE3DC553"
+func guidToSID(guid string) (string, error) {
+	// Remove hyphens from GUID
+	cleanGUID := strings.ReplaceAll(guid, "-", "")
+	if len(cleanGUID) != 32 {
+		return "", fmt.Errorf("invalid GUID format: %s", guid)
+	}
+
+	// Parse the GUID parts (GUIDs have a specific byte order)
+	// Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	// Parts:  time_low-time_mid-time_hi_and_version-clock_seq_and_reserved-node
+
+	// Decode the hex string
+	bytes, err := hex.DecodeString(cleanGUID)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode GUID: %w", err)
+	}
+
+	// GUIDs in SQL Server SID format: the first three parts are little-endian
+	// Swap bytes in parts 1, 2, and 3 (bytes 0-3, 4-5, 6-7)
+	// Part 1: bytes 0-3 (4 bytes) - reverse
+	bytes[0], bytes[1], bytes[2], bytes[3] = bytes[3], bytes[2], bytes[1], bytes[0]
+	// Part 2: bytes 4-5 (2 bytes) - reverse
+	bytes[4], bytes[5] = bytes[5], bytes[4]
+	// Part 3: bytes 6-7 (2 bytes) - reverse
+	bytes[6], bytes[7] = bytes[7], bytes[6]
+	// Parts 4 and 5 (bytes 8-15) remain in big-endian order
+
+	// Convert to hex string with 0x prefix
+	return "0x" + strings.ToUpper(hex.EncodeToString(bytes)), nil
+}
 
 // User represents a database user.
 type User struct {
@@ -19,8 +54,16 @@ type User struct {
 	LoginName         string
 }
 
-// GetUser retrieves a user from a specific database.
+// Request a user from a specific database.
 func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*User, error) {
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		return c.getUserWithDB(ctx, db, userName)
+	}
+
+	// Fallback to USE statement for on-premises SQL Server
 	query := `
 		SELECT
 			dp.principal_id,
@@ -38,8 +81,29 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 		return nil, err
 	}
 
+	return scanUser(row)
+}
+
+func (c *Client) getUserWithDB(ctx context.Context, db *sql.DB, userName string) (*User, error) {
+	query := `
+		SELECT
+			dp.principal_id,
+			dp.name,
+			DB_ID() as database_id,
+			ISNULL(dp.default_schema_name, 'dbo'),
+			dp.type,
+			ISNULL(sp.name, '')
+		FROM sys.database_principals dp
+		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
+		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E')`
+
+	row := db.QueryRowContext(ctx, query, userName)
+	return scanUser(row)
+}
+
+func scanUser(row *sql.Row) (*User, error) {
 	var user User
-	err = row.Scan(
+	err := row.Scan(
 		&user.PrincipalID,
 		&user.Name,
 		&user.DatabaseID,
@@ -53,7 +117,6 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-
 	return &user, nil
 }
 
@@ -195,9 +258,21 @@ type UpdateSQLUserOptions struct {
 func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (*User, error) {
 	if opts.DefaultSchema != nil {
 		query := fmt.Sprintf("ALTER USER [%s] WITH DEFAULT_SCHEMA = [%s]", opts.UserName, *opts.DefaultSchema)
-		err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
-		if err != nil {
-			return nil, fmt.Errorf("failed to update SQL user: %w", err)
+
+		// Try to get a direct connection to the database first (Azure SQL support)
+		db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
+		if err == nil {
+			defer db.Close()
+			_, err = db.ExecContext(ctx, query)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update SQL user: %w", err)
+			}
+		} else {
+			// Fallback to existing logic
+			err = c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update SQL user: %w", err)
+			}
 		}
 	}
 
@@ -207,7 +282,17 @@ func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (
 // DropUser drops a user from a database.
 func (c *Client) DropUser(ctx context.Context, databaseName, userName string) error {
 	query := fmt.Sprintf("DROP USER IF EXISTS [%s]", userName)
-	err := c.ExecInDatabaseContext(ctx, databaseName, query)
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		_, err = db.ExecContext(ctx, query)
+		return err
+	}
+
+	// Fallback to existing logic
+	err = c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop user: %w", err)
 	}
@@ -225,28 +310,38 @@ type CreateAzureADUserOptions struct {
 
 // CreateAzureADUser creates a new Azure AD user.
 func (c *Client) CreateAzureADUser(ctx context.Context, opts CreateAzureADUserOptions) (*User, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
+	// Get a connection directly to the target database
+	// This is required for Azure SQL Database which doesn't support USE statement
+	db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database %s: %w", opts.DatabaseName, err)
 	}
+	defer db.Close()
 
 	defaultSchema := opts.DefaultSchema
 	if defaultSchema == "" {
 		defaultSchema = "dbo"
 	}
 
+	// Convert Azure AD Object ID (GUID) to binary SID format
+	sid, err := guidToSID(opts.ObjectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert object ID to SID: %w", err)
+	}
+
 	query := fmt.Sprintf(
 		"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
 		opts.UserName,
-		opts.ObjectID,
+		sid,
 		defaultSchema,
 	)
 
-	_, err := c.ExecContext(ctx, query)
+	_, err = db.ExecContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure AD user: %w", err)
 	}
 
-	return c.GetUser(ctx, opts.DatabaseName, opts.UserName)
+	return c.getUserWithDB(ctx, db, opts.UserName)
 }
 
 // CreateAzureADServicePrincipalOptions contains options for creating an Azure AD service principal.
@@ -259,26 +354,36 @@ type CreateAzureADServicePrincipalOptions struct {
 
 // CreateAzureADServicePrincipal creates a new Azure AD service principal.
 func (c *Client) CreateAzureADServicePrincipal(ctx context.Context, opts CreateAzureADServicePrincipalOptions) (*User, error) {
-	if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-		return nil, err
+	// Get a connection directly to the target database
+	// This is required for Azure SQL Database which doesn't support USE statement
+	db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database %s: %w", opts.DatabaseName, err)
 	}
+	defer db.Close()
 
 	defaultSchema := opts.DefaultSchema
 	if defaultSchema == "" {
 		defaultSchema = "dbo"
 	}
 
+	// Convert Azure AD Client ID (GUID) to binary SID format
+	sid, err := guidToSID(opts.ClientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert client ID to SID: %w", err)
+	}
+
 	query := fmt.Sprintf(
 		"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
 		opts.Name,
-		opts.ClientID,
+		sid,
 		defaultSchema,
 	)
 
-	_, err := c.ExecContext(ctx, query)
+	_, err = db.ExecContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure AD service principal: %w", err)
 	}
 
-	return c.GetUser(ctx, opts.DatabaseName, opts.Name)
+	return c.getUserWithDB(ctx, db, opts.Name)
 }
