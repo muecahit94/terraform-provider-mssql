@@ -70,5 +70,31 @@ resource "mssql_schema_permission" "app_execute" {
   schema_name       = mssql_schema.app.name
   principal_name    = mssql_sql_user.app.name
   permission        = "EXECUTE"
+  with_grant_option = false
+}
+
+# ===== Test with non-owner user =====
+
+# Create a second login for testing
+resource "mssql_sql_login" "test" {
+  name             = "test_login"
+  password         = var.app_password
+  default_database = mssql_database.app.name
+}
+
+# Create a second user (NOT the schema owner)
+resource "mssql_sql_user" "test" {
+  database_name  = mssql_database.app.name
+  name           = "test_user"
+  login_name     = mssql_sql_login.test.name
+  default_schema = "dbo"
+}
+
+# Grant SELECT permission on the schema to test_user (non-owner)
+resource "mssql_schema_permission" "test_select" {
+  database_name     = mssql_database.app.name
+  schema_name       = mssql_schema.app.name
+  principal_name    = mssql_sql_user.test.name
+  permission        = "SELECT"
   with_grant_option = true
 }

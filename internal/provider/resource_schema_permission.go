@@ -131,9 +131,15 @@ func (r *SchemaPermissionResource) Read(ctx context.Context, req resource.ReadRe
 		return
 	}
 
-	data.WithGrantOption = types.BoolValue(perm.WithGrantOption)
+	// Only update WithGrantOption if this is a real permission (DatabaseID > 0).
+	// Virtual permissions for schema owners have DatabaseID = 0 and we should
+	// preserve the Terraform-configured value to avoid drift.
+	if perm.DatabaseID > 0 {
+		data.WithGrantOption = types.BoolValue(perm.WithGrantOption)
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
+
 
 func (r *SchemaPermissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data, state SchemaPermissionResourceModel

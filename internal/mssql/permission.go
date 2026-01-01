@@ -310,8 +310,9 @@ func (c *Client) GrantSchemaPermission(ctx context.Context, databaseName, schema
 }
 
 // RevokeSchemaPermission revokes a schema-level permission.
+// CASCADE is used to also revoke any permissions that were granted by this principal.
 func (c *Client) RevokeSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) error {
-	query := fmt.Sprintf("REVOKE %s ON SCHEMA::[%s] FROM [%s]", strings.ToUpper(permission), schemaName, principalName)
+	query := fmt.Sprintf("REVOKE %s ON SCHEMA::[%s] FROM [%s] CASCADE", strings.ToUpper(permission), schemaName, principalName)
 	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to revoke schema permission: %w", err)

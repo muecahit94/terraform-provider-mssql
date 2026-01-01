@@ -246,6 +246,24 @@ EOF
         record_test "SQL Verify: Permission granted" "FAIL"
     fi
     
+    # Check test_user has SELECT on app schema with WITH GRANT OPTION (state = W)
+    local test_user_perm=$(run_sql "SELECT state FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id JOIN sys.schemas s ON p.major_id = s.schema_id WHERE pr.name = 'test_user' AND s.name = 'app' AND p.permission_name = 'SELECT'" "application_db" 2>/dev/null)
+    if echo "$test_user_perm" | grep -q "W"; then
+        record_test "SQL Verify: test_user schema permission" "PASS"
+    else
+        log_error "Expected test_user to have SELECT WITH GRANT OPTION (W)"
+        record_test "SQL Verify: test_user schema permission" "FAIL"
+    fi
+    
+    # Check app_user owns the app schema
+    local app_schema_owner=$(run_sql "SELECT dp.name FROM sys.schemas s JOIN sys.database_principals dp ON s.principal_id = dp.principal_id WHERE s.name = 'app'" "application_db" 2>/dev/null)
+    if echo "$app_schema_owner" | grep -q "app_user"; then
+        record_test "SQL Verify: app_user schema owner" "PASS"
+    else
+        log_error "Expected app_user to own the app schema"
+        record_test "SQL Verify: app_user schema owner" "FAIL"
+    fi
+    
     # Check idempotency
     log_info "Checking idempotency..."
     local plan_output
@@ -405,8 +423,28 @@ phase_drift_recovery() {
         record_test "Drift Recovery: Login re-enable" "FAIL"
     fi
     
+    # Test 5: Schema permission drift recovery
+    log_info "Test: Schema permission drift recovery..."
+    
+    # Revoke the test_user's SELECT permission on the app schema
+    run_sql "REVOKE SELECT ON SCHEMA::app FROM test_user CASCADE" "application_db" >/dev/null 2>&1 || true
+    
+    apply_output=$(terraform apply -auto-approve 2>&1)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        # Verify the permission was restored with WITH GRANT OPTION
+        local restored_perm=$(run_sql "SELECT state FROM sys.database_permissions p JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id JOIN sys.schemas s ON p.major_id = s.schema_id WHERE pr.name = 'test_user' AND s.name = 'app' AND p.permission_name = 'SELECT'" "application_db" 2>/dev/null)
+        if echo "$restored_perm" | grep -q "W"; then
+            record_test "Drift Recovery: Schema permission restoration" "PASS"
+        else
+            record_test "Drift Recovery: Schema permission restoration" "FAIL"
+        fi
+    else
+        record_test "Drift Recovery: Schema permission restoration" "FAIL"
+    fi
+    
     return 0
 }
+
 
 # Phase 6: Cleanup
 phase_cleanup() {
