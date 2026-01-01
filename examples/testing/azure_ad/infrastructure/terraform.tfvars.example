@@ -1,0 +1,36 @@
+# Azure SQL Server Infrastructure Configuration
+# Copy this file to terraform.tfvars and fill in the values
+
+# =============================================================================
+# Required Variables
+# =============================================================================
+
+# Azure subscription ID (Required)
+# You can find this via `az account show --query id -o tsv`
+subscription_id = "your-subscription-id"
+
+# =============================================================================
+# Optional Variables
+# =============================================================================
+
+# SQL Server Name
+# sql_server_name = "sql-mssql-provider-test-CHANGEME"
+
+# SQL admin password
+# If left empty or commented out, a strong random password will be automatically generated.
+# sql_admin_password = "YourStrongP@ssw0rd123!"
+
+# Resource group name
+# resource_group_name = "rg-mssql-provider-test"
+
+# Azure region
+# location = "westeurope"
+
+# Database name
+# database_name = "testdb"
+
+# SQL Admin Username
+# sql_admin_username = "sqladmin"
+
+# Enable Azure AD admin (your logged-in user becomes admin)
+# enable_azure_ad_admin = true

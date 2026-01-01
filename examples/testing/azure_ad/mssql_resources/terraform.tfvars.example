@@ -1,0 +1,47 @@
+# MSSQL Provider Resources Configuration
+# Copy this file to terraform.tfvars and fill in the values
+#
+# Prerequisites:
+# 1. Run 'az login' for Azure AD authentication (or use Service Principal below)
+# 2. Deploy infrastructure first (cd ../infrastructure && terraform apply)
+# 3. Use the sql_server_fqdn output from infrastructure
+
+# =============================================================================
+# Required Variables (from infrastructure output)
+# =============================================================================
+
+# Azure SQL Server FQDN (from infrastructure output: sql_server_fqdn)
+sql_hostname = "sql-mssql-provider-test-CHANGEME.database.windows.net"
+
+# Database name (from infrastructure output: database_name)
+database_name = "testdb"
+
+# =============================================================================
+# Optional: Service Principal Authentication
+# =============================================================================
+# If not using 'az login', provide Service Principal credentials
+# To create a Service Principal: az ad sp create-for-rbac --name "mssql-provider-sp"
+
+# azure_client_id     = "00000000-0000-0000-0000-000000000000"
+# azure_client_secret = "your-client-secret"
+# azure_tenant_id     = "00000000-0000-0000-0000-000000000000"
+
+# =============================================================================
+# Optional: Azure AD User
+# =============================================================================
+
+# Create an Azure AD user in the database
+# To get object_id: az ad user show --id "user@domain.com" --query id -o tsv
+
+# developer_email     = "developer@yourdomain.com"
+# developer_object_id = "00000000-0000-0000-0000-000000000000"
+
+# =============================================================================
+# Optional: Azure AD Service Principal (database user)
+# =============================================================================
+
+# Create an Azure AD service principal (application) in the database
+# To get client_id: az ad app show --id "app-name" --query appId -o tsv
+
+# app_name      = "my-application"
+# app_client_id = "00000000-0000-0000-0000-000000000000"

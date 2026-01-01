@@ -1,4 +1,4 @@
-.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev e2e
+.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev e2e-local e2e-azure e2e-full
 
 HOSTNAME=registry.terraform.io
 NAMESPACE=muecahit94
@@ -69,5 +69,12 @@ dev: install
 check: fmt vet lint test
 
 # Run end-to-end tests (requires docker, mssql-cli)
-e2e:
+e2e-local:
 	./scripts/e2e_test.sh
+
+# Run end-to-end tests for Azure AD example (requires az login, go, terraform)
+e2e-azure:
+	./scripts/e2e_test_azure.sh
+
+# Run full end-to-end test suite (local + azure)
+e2e-full: e2e-local e2e-azure
