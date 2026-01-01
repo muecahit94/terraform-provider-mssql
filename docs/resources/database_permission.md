@@ -33,6 +33,10 @@ resource "mssql_database_permission" "with_grant" {
 - `permission` - (Required) The permission to grant (e.g., SELECT, INSERT, UPDATE, DELETE, EXECUTE, CONTROL).
 - `with_grant_option` - (Optional) Whether the principal can grant this permission to others. Defaults to `false`.
 
+## Attribute Reference
+
+- `id` - The permission ID in format `database_name/principal_name/permission`.
+
 ## Import
 
 ```shell

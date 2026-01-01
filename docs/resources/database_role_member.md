@@ -25,6 +25,10 @@ resource "mssql_database_role_member" "example" {
 - `role_name` - (Required) The name of the role.
 - `member_name` - (Required) The name of the member (user or role).
 
+## Attribute Reference
+
+- `id` - The membership ID in format `database_name/role_name/member_name`.
+
 ## Import
 
 ```shell

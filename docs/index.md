@@ -77,7 +77,7 @@ provider "mssql" {
 
 ### Azure AD - Default Credentials
 
-Uses the Azure credential chain (environment variables, managed identity, Azure CLI):
+Uses the Azure credential chain (environment variables, managed identity, Azure CLI, etc.):
 
 ```hcl
 provider "mssql" {

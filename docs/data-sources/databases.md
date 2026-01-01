@@ -19,6 +19,10 @@ output "database_names" {
 }
 ```
 
+## Argument Reference
+
+This data source has no required arguments.
+
 ## Attribute Reference
 
 - `databases` - A list of databases, each with:

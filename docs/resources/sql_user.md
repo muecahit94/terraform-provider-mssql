@@ -39,6 +39,7 @@ resource "mssql_sql_user" "example" {
 ## Attribute Reference
 
 - `id` - The user ID in format `database_id/principal_id`.
+- `default_schema` - The default schema for the user.
 
 ## Import
 

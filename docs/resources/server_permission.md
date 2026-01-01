@@ -24,6 +24,10 @@ resource "mssql_server_permission" "example" {
 - `permission` - (Required) The permission to grant.
 - `with_grant_option` - (Optional) Whether the principal can grant this permission to others.
 
+## Attribute Reference
+
+- `id` - The permission ID in format `principal_name/permission`.
+
 ## Import
 
 ```shell

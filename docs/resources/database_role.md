@@ -31,6 +31,7 @@ resource "mssql_database_role" "example" {
 ## Attribute Reference
 
 - `id` - The role ID in format `database_id/principal_id`.
+- `owner_name` - The owner of the role (computed if not specified).
 
 ## Import
 

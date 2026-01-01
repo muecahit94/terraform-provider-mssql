@@ -27,6 +27,11 @@ resource "mssql_azuread_user" "example" {
 - `object_id` - (Required) The Azure AD object ID of the user.
 - `default_schema` - (Optional) The default schema for the user. Defaults to `dbo`.
 
+## Attribute Reference
+
+- `id` - The user ID in format `database_id/principal_id`.
+- `default_schema` - The default schema for the user.
+
 ## Import
 
 ```shell

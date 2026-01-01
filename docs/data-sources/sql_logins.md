@@ -19,6 +19,10 @@ output "login_names" {
 }
 ```
 
+## Argument Reference
+
+This data source has no required arguments.
+
 ## Attribute Reference
 
 - `logins` - A list of logins with all login attributes.

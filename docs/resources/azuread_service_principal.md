@@ -27,6 +27,11 @@ resource "mssql_azuread_service_principal" "example" {
 - `client_id` - (Required) The Azure AD client (application) ID.
 - `default_schema` - (Optional) The default schema. Defaults to `dbo`.
 
+## Attribute Reference
+
+- `id` - The service principal ID in format `database_id/principal_id`.
+- `default_schema` - The default schema for the service principal.
+
 ## Import
 
 ```shell

@@ -25,6 +25,11 @@ resource "mssql_schema" "example" {
 - `name` - (Required) The name of the schema.
 - `owner_name` - (Optional) The owner of the schema.
 
+## Attribute Reference
+
+- `id` - The schema ID in format `database_id/schema_id`.
+- `owner_name` - The owner of the schema (computed if not specified).
+
 ## Import
 
 ```shell

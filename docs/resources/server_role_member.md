@@ -23,6 +23,10 @@ resource "mssql_server_role_member" "example" {
 - `role_name` - (Required) The name of the server role.
 - `member_name` - (Required) The name of the login.
 
+## Attribute Reference
+
+- `id` - The membership ID in format `role_name/member_name`.
+
 ## Import
 
 ```shell

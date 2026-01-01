@@ -28,6 +28,10 @@ resource "mssql_schema_permission" "example" {
 - `permission` - (Required) The permission to grant.
 - `with_grant_option` - (Optional) Whether the principal can grant this permission to others.
 
+## Attribute Reference
+
+- `id` - The permission ID in format `database_name/schema_name/principal_name/permission`.
+
 ## Import
 
 ```shell

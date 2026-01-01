@@ -22,6 +22,11 @@ resource "mssql_server_role" "example" {
 - `name` - (Required) The name of the role.
 - `owner_name` - (Optional) The owner of the role.
 
+## Attribute Reference
+
+- `id` - The role principal ID.
+- `owner_name` - The owner of the role (computed if not specified).
+
 ## Import
 
 ```shell
