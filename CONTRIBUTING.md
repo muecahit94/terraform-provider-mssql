@@ -121,6 +121,20 @@ docker-compose up -d
 make testacc
 ```
 
+### End-to-End Tests
+E2E tests verify the full lifecycle including infrastructure provisioning:
+
+```bash
+# Run local E2E tests (using Docker)
+make e2e-local
+
+# Run Azure AD E2E tests (requires az login and sqlcmd/mssql-cli)
+make e2e-azure
+
+# Run full suite
+make e2e-full
+```
+
 ### Test Environment Variables
 
 | Variable | Description | Default |

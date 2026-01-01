@@ -26,6 +26,7 @@ Create a **modern, reliable Terraform provider** for Microsoft SQL Server and Az
 | CI/CD Workflows | ✅ Complete |
 | Documentation | ✅ Complete |
 | Examples | ✅ Complete |
+| E2E Tests | ✅ Complete |
 
 ### Resources Implemented
 - `mssql_database`
@@ -88,7 +89,7 @@ Create a **modern, reliable Terraform provider** for Microsoft SQL Server and Az
 ```
 .
 ├── internal/
-│   ├── mssql/          # SQL Server client (7 files)
+│   ├── mssql/          # SQL Server client (8 files)
 │   │   ├── client.go   # Connection + auth
 │   │   ├── database.go
 │   │   ├── login.go
@@ -106,13 +107,19 @@ Create a **modern, reliable Terraform provider** for Microsoft SQL Server and Az
 │   ├── resources/ (14 files)
 │   └── data-sources/ (5 files)
 ├── examples/
-│   ├── complete/
-│   ├── azure_ad/
-│   └── data_sources/
+│   ├── resources/      # Documentation examples
+│   ├── data_sources/   # Documentation examples
+│   └── testing/        # Test configurations
+│       ├── complete/
+│       ├── azure_ad/
+│       └── ...
 └── .github/workflows/
     ├── ci.yml
     ├── acceptance.yml
     └── release.yml
+├── scripts/            # E2E test scripts
+│   ├── e2e_test.sh
+│   └── e2e_test_azure.sh
 ```
 
 ### Resilient Design
@@ -135,6 +142,13 @@ Resources handle edge cases gracefully:
 - Run against Docker SQL Server
 - Full CRUD + import tests
 
+### End-to-End Tests
+- Automated scripts in `scripts/`
+- Full lifecycle validation (infrastructure + resources)
+- **Local**: `make e2e-local` (Docker)
+- **Azure**: `make e2e-azure` (Real Azure Resources)
+
+
 ---
 
 ## CI/CD
@@ -155,6 +169,7 @@ Resources handle edge cases gracefully:
 - [x] `Makefile`
 - [x] `examples/`
 - [x] `docs/`
+- [x] `scripts/`
 - [x] `CONTRIBUTING.md`
 - [x] `LICENSE`
 - [x] `README.md`

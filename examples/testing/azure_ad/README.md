@@ -37,15 +37,15 @@ cd infrastructure
 
 # Create terraform.tfvars
 cat > terraform.tfvars << EOF
-sql_server_name    = "sql-mssql-test-UNIQUE"  # Must be globally unique
-sql_admin_password = "YourStrongP@ssw0rd123!"
+sql_server_name = "sql-mssql-test-UNIQUE"  # Must be globally unique
+# sql_admin_password is optional (auto-generated if omitted)
 EOF
 
 terraform init
 terraform apply
 ```
 
-Note the `sql_server_fqdn` output - you'll need it for Phase 2.
+Note the outputs (`sql_server_fqdn`, `mi_name`, `mi_principal_id`, `sql_admin_password`) - you'll need them for Phase 2.
 
 ### Phase 2: Create MSSQL Resources
 
@@ -54,7 +54,7 @@ cd ../mssql_resources
 
 # Create terraform.tfvars using outputs from Phase 1
 cat > terraform.tfvars << EOF
-sql_hostname  = "sql-mssql-test-UNIQUE.database.windows.net"  # From Phase 1 output
+sql_hostname = "sql-mssql-test-UNIQUE.database.windows.net"
 database_name = "testdb"
 
 # Optional: Create Azure AD user
@@ -64,11 +64,31 @@ developer_object_id = "azure-ad-object-id"
 # Optional: Create Azure AD service principal
 app_name      = "my-application"
 app_client_id = "app-client-id"
+
+# Optional: Managed Identity
+mi_name      = "uami-mssql-test"
+mi_object_id = "00000000-0000-0000-0000-000000000000"
 EOF
 
 terraform init
 terraform apply
 ```
+
+## Automated Testing
+
+A dedicated E2E test script is available to run this full scenario automatically:
+
+```bash
+# From repository root
+make e2e-azure
+```
+
+This script:
+1. Deploys infrastructure
+2. Verifies connectivity
+3. Deploys MSSQL resources
+4. Verifies User, Role, and Permission creation
+5. Cleans up all resources
 
 ## Authentication
 
