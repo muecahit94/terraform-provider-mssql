@@ -72,6 +72,11 @@ jobs:
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+        include:
+          # Add 32-bit ARM builds for Raspberry Pi
+          - goos: linux
+            goarch: arm
+            goarm: "7"  # Raspberry Pi 2, 3, 4 (32-bit mode)
     steps:
       - uses: actions/checkout@v4
 
@@ -83,4 +88,5 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
         run: go build -o terraform-provider-mssql

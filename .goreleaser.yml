@@ -23,7 +23,6 @@ builds:
       - arm64
       - arm     # 32-bit ARM for older Raspberry Pi (Pi 2, Pi 3 32-bit OS)
     goarm:
-      - "6"     # Raspberry Pi 1, Pi Zero
       - "7"     # Raspberry Pi 2, 3, 4 (32-bit mode)
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 
