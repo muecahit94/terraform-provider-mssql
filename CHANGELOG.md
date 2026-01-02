@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.1.0...v1.2.0) (2026-01-02)
+
+
+### Features
+
+* add 32-bit ARM (armv6, armv7) build support for Raspberry Pi ([0a40f1c](https://github.com/muecahit94/terraform-provider-mssql/commit/0a40f1ca001ed29e4cb425b081f1f6334f8737be))
+
 ## [1.1.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.0.4...v1.1.0) (2026-01-01)
 
 
