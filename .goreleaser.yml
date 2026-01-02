@@ -21,9 +21,17 @@ builds:
     goarch:
       - amd64
       - arm64
-      - arm     # 32-bit ARM for older Raspberry Pi (Pi 2, Pi 3 32-bit OS)
+      - arm     # 32-bit ARM for Raspberry Pi
     goarm:
       - "7"     # Raspberry Pi 2, 3, 4 (32-bit mode)
+    ignore:
+      # ARM 32-bit only makes sense for Linux (Raspberry Pi)
+      - goos: windows
+        goarch: arm
+      - goos: darwin
+        goarch: arm
+      - goos: freebsd
+        goarch: arm
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 
 archives:
