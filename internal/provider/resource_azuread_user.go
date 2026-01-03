@@ -65,10 +65,12 @@ func (r *AzureADUserResource) Schema(ctx context.Context, req resource.SchemaReq
 				},
 			},
 			"object_id": schema.StringAttribute{
-				Description: "The Azure AD object ID of the user.",
-				Required:    true,
+				Description: "The Azure AD object ID of the user. Required for managed identities, optional for email-based users.",
+				Optional:    true,
+				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"default_schema": schema.StringAttribute{
@@ -99,10 +101,12 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	objectID := data.ObjectID.ValueString()
+
 	user, err := r.client.CreateAzureADUser(ctx, mssql.CreateAzureADUserOptions{
 		DatabaseName:  data.DatabaseName.ValueString(),
 		UserName:      data.Name.ValueString(),
-		ObjectID:      data.ObjectID.ValueString(),
+		ObjectID:      objectID,
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	})
 	if err != nil {
@@ -111,6 +115,9 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 	}
 
 	data.ID = types.StringValue(fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))
+	// Ensure object_id is set (empty string if not provided) to satisfy Terraform's requirement
+	// that all computed values must be known after apply
+	data.ObjectID = types.StringValue(objectID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 

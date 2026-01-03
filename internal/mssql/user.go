@@ -323,18 +323,29 @@ func (c *Client) CreateAzureADUser(ctx context.Context, opts CreateAzureADUserOp
 		defaultSchema = "dbo"
 	}
 
-	// Convert Azure AD Object ID (GUID) to binary SID format
-	sid, err := guidToSID(opts.ObjectID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert object ID to SID: %w", err)
-	}
+	var query string
+	if opts.ObjectID != "" {
+		// For managed identities: use SID-based creation
+		// Convert Azure AD Object ID (GUID) to binary SID format
+		sid, err := guidToSID(opts.ObjectID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert object ID to SID: %w", err)
+		}
 
-	query := fmt.Sprintf(
-		"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
-		opts.UserName,
-		sid,
-		defaultSchema,
-	)
+		query = fmt.Sprintf(
+			"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
+			opts.UserName,
+			sid,
+			defaultSchema,
+		)
+	} else {
+		// For email-based users: use FROM EXTERNAL PROVIDER
+		query = fmt.Sprintf(
+			"CREATE USER [%s] FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = [%s]",
+			opts.UserName,
+			defaultSchema,
+		)
+	}
 
 	_, err = db.ExecContext(ctx, query)
 	if err != nil {

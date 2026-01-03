@@ -46,11 +46,11 @@ variable "developer_email" {
   default     = ""
 }
 
-variable "developer_object_id" {
-  description = "Azure AD object ID of the developer"
-  type        = string
-  default     = ""
-}
+# variable "developer_object_id" {
+#   description = "Azure AD object ID of the developer"
+#   type        = string
+#   default     = ""
+# }
 
 # =============================================================================
 # Azure AD Service Principal Variables (for database access)

@@ -3,7 +3,7 @@
 # =============================================================================
 
 locals {
-  create_developer = var.developer_email != "" && var.developer_object_id != ""
+  create_developer = var.developer_email != ""
   create_app       = var.app_name != "" && var.app_client_id != ""
 }
 
@@ -17,7 +17,6 @@ resource "mssql_azuread_user" "developer" {
 
   database_name  = var.database_name
   name           = var.developer_email
-  object_id      = var.developer_object_id
   default_schema = "dbo"
 }
 
