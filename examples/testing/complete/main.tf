@@ -29,12 +29,22 @@ resource "mssql_sql_login" "app" {
   default_database = mssql_database.app.name
 }
 
-# Create a user in the database
+# Create a role for read-only access (must exist before user with inline roles)
+resource "mssql_database_role" "readers" {
+  database_name = mssql_database.app.name
+  name          = "app_readers"
+}
+
+# =============================================================================
+# OPTION 1: Using inline roles attribute (recommended)
+# =============================================================================
 resource "mssql_sql_user" "app" {
   database_name  = mssql_database.app.name
   name           = "app_user"
   login_name     = mssql_sql_login.app.name
   default_schema = "app"
+  # OPTION 1: Inline roles - role assignment is managed within the user resource
+  roles = [mssql_database_role.readers.name]
 }
 
 # Create a schema for the application
@@ -42,19 +52,6 @@ resource "mssql_schema" "app" {
   database_name = mssql_database.app.name
   name          = "app"
   owner_name    = mssql_sql_user.app.name
-}
-
-# Create a role for read-only access
-resource "mssql_database_role" "readers" {
-  database_name = mssql_database.app.name
-  name          = "app_readers"
-}
-
-# Add the user to the role
-resource "mssql_database_role_member" "app_reader" {
-  database_name = mssql_database.app.name
-  role_name     = mssql_database_role.readers.name
-  member_name   = mssql_sql_user.app.name
 }
 
 # Grant SELECT permission to the role
@@ -73,7 +70,15 @@ resource "mssql_schema_permission" "app_execute" {
   with_grant_option = false
 }
 
-# ===== Test with non-owner user =====
+# =============================================================================
+# OPTION 2: Using explicit mssql_database_role_member resources
+# =============================================================================
+
+# Create a second role for writers
+resource "mssql_database_role" "writers" {
+  database_name = mssql_database.app.name
+  name          = "app_writers"
+}
 
 # Create a second login for testing
 resource "mssql_sql_login" "test" {
@@ -82,12 +87,26 @@ resource "mssql_sql_login" "test" {
   default_database = mssql_database.app.name
 }
 
-# Create a second user (NOT the schema owner)
+# Create a second user (NOT the schema owner) WITHOUT inline roles
 resource "mssql_sql_user" "test" {
   database_name  = mssql_database.app.name
   name           = "test_user"
   login_name     = mssql_sql_login.test.name
   default_schema = "dbo"
+  # NOT using inline roles - using explicit mssql_database_role_member instead
+}
+
+# OPTION 2: Explicit role member resources for test_user
+resource "mssql_database_role_member" "test_reader" {
+  database_name = mssql_database.app.name
+  role_name     = mssql_database_role.readers.name
+  member_name   = mssql_sql_user.test.name
+}
+
+resource "mssql_database_role_member" "test_writer" {
+  database_name = mssql_database.app.name
+  role_name     = mssql_database_role.writers.name
+  member_name   = mssql_sql_user.test.name
 }
 
 # Grant SELECT permission on the schema to test_user (non-owner)

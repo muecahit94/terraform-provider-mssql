@@ -26,6 +26,7 @@ resource "mssql_sql_user" "example" {
   name           = "my_user"
   login_name     = mssql_sql_login.example.name
   default_schema = "dbo"
+  roles          = ["db_datareader", "db_datawriter"]
 }
 ```
 
@@ -35,11 +36,13 @@ resource "mssql_sql_user" "example" {
 - `name` - (Required) The name of the user. Changing this forces a new resource.
 - `login_name` - (Required) The name of the login to map this user to. Changing this forces a new resource.
 - `default_schema` - (Optional) The default schema for the user. Defaults to `dbo`.
+- `roles` - (Optional) Set of database roles to assign to this user.
 
 ## Attribute Reference
 
 - `id` - The user ID in format `database_id/principal_id`.
 - `default_schema` - The default schema for the user.
+- `roles` - The set of database roles assigned to this user.
 
 ## Import
 
@@ -48,3 +51,4 @@ Users can be imported using `database_name/user_name`:
 ```shell
 terraform import mssql_sql_user.example my_database/my_user
 ```
+

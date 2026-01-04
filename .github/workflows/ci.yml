@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # workflow_dispatch:  # Manual trigger only
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+          cache: false  # Disable caching to avoid tar errors
 
       - name: Run go fmt
         run: |
@@ -45,6 +47,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+          cache: false  # Disable caching to avoid tar errors
 
       - name: Run tests
         run: go test -v -cover -timeout 30s ./...
@@ -58,11 +61,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+          cache: false  # Disable caching to avoid tar errors
 
       - name: Run govulncheck
         uses: golang/govulncheck-action@v1
         with:
-          go-version-file: 'go.mod'
           go-package: ./...
 
   build:
@@ -83,6 +86,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+          cache: false  # Disable caching to avoid tar errors
 
       - name: Build
         env:

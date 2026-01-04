@@ -6,8 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -35,6 +37,7 @@ type AzureADUserResourceModel struct {
 	Name          types.String `tfsdk:"name"`
 	ObjectID      types.String `tfsdk:"object_id"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
+	Roles         types.Set    `tfsdk:"roles"`
 }
 
 func (r *AzureADUserResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -78,6 +81,12 @@ func (r *AzureADUserResource) Schema(ctx context.Context, req resource.SchemaReq
 				Computed: true,
 				Default:  stringdefault.StaticString("dbo"),
 			},
+			"roles": schema.SetAttribute{
+				Description: "List of database roles to assign to this user.",
+				Optional:    true,
+				Computed:    true,
+				ElementType: types.StringType,
+			},
 		},
 	}
 }
@@ -114,10 +123,36 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	// Assign roles if specified
+	var roles []string
+	if !data.Roles.IsNull() && !data.Roles.IsUnknown() {
+		resp.Diagnostics.Append(data.Roles.ElementsAs(ctx, &roles, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for _, role := range roles {
+			err := r.client.AddDatabaseRoleMember(ctx, data.DatabaseName.ValueString(), role, data.Name.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError("Failed to assign role", fmt.Sprintf("Failed to add user to role '%s': %s", role, err.Error()))
+				return
+			}
+		}
+	}
+
 	data.ID = types.StringValue(fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))
-	// Ensure object_id is set (empty string if not provided) to satisfy Terraform's requirement
-	// that all computed values must be known after apply
 	data.ObjectID = types.StringValue(objectID)
+
+	// Set roles in state
+	if len(roles) > 0 {
+		roleValues := make([]attr.Value, len(roles))
+		for i, role := range roles {
+			roleValues[i] = types.StringValue(role)
+		}
+		data.Roles, _ = types.SetValue(types.StringType, roleValues)
+	} else {
+		data.Roles, _ = types.SetValue(types.StringType, []attr.Value{})
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -139,6 +174,19 @@ func (r *AzureADUserResource) Read(ctx context.Context, req resource.ReadRequest
 	}
 
 	data.DefaultSchema = types.StringValue(user.DefaultSchemaName)
+
+	// Read user's roles
+	roles, err := r.client.GetUserRoles(ctx, data.DatabaseName.ValueString(), data.Name.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read user roles", err.Error())
+		return
+	}
+	roleValues := make([]attr.Value, len(roles))
+	for i, role := range roles {
+		roleValues[i] = types.StringValue(role)
+	}
+	data.Roles, _ = types.SetValue(types.StringType, roleValues)
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -161,6 +209,56 @@ func (r *AzureADUserResource) Update(ctx context.Context, req resource.UpdateReq
 			resp.Diagnostics.AddError("Failed to update Azure AD user", err.Error())
 			return
 		}
+	}
+
+	// Update roles if changed
+	if !data.Roles.Equal(state.Roles) {
+		var desiredRoles, currentRoles []string
+		resp.Diagnostics.Append(data.Roles.ElementsAs(ctx, &desiredRoles, false)...)
+		resp.Diagnostics.Append(state.Roles.ElementsAs(ctx, &currentRoles, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Find roles to add and remove
+		currentSet := make(map[string]bool)
+		for _, role := range currentRoles {
+			currentSet[role] = true
+		}
+		desiredSet := make(map[string]bool)
+		for _, role := range desiredRoles {
+			desiredSet[role] = true
+		}
+
+		// Add new roles
+		for _, role := range desiredRoles {
+			if !currentSet[role] {
+				err := r.client.AddDatabaseRoleMember(ctx, data.DatabaseName.ValueString(), role, data.Name.ValueString())
+				if err != nil {
+					resp.Diagnostics.AddError("Failed to add role", fmt.Sprintf("Failed to add user to role '%s': %s", role, err.Error()))
+					return
+				}
+			}
+		}
+
+		// Remove old roles
+		for _, role := range currentRoles {
+			if !desiredSet[role] {
+				err := r.client.RemoveDatabaseRoleMember(ctx, data.DatabaseName.ValueString(), role, data.Name.ValueString())
+				if err != nil {
+					resp.Diagnostics.AddError("Failed to remove role", fmt.Sprintf("Failed to remove user from role '%s': %s", role, err.Error()))
+					return
+				}
+			}
+		}
+
+		// Update state with sorted roles
+		sort.Strings(desiredRoles)
+		roleValues := make([]attr.Value, len(desiredRoles))
+		for i, role := range desiredRoles {
+			roleValues[i] = types.StringValue(role)
+		}
+		data.Roles, _ = types.SetValue(types.StringType, roleValues)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

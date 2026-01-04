@@ -364,6 +364,65 @@ func (c *Client) RemoveDatabaseRoleMember(ctx context.Context, databaseName, rol
 	return nil
 }
 
+// GetUserRoles retrieves all database roles a user belongs to.
+func (c *Client) GetUserRoles(ctx context.Context, databaseName, userName string) ([]string, error) {
+	query := `
+		SELECT r.name
+		FROM sys.database_role_members drm
+		INNER JOIN sys.database_principals r ON drm.role_principal_id = r.principal_id
+		INNER JOIN sys.database_principals m ON drm.member_principal_id = m.principal_id
+		WHERE m.name = @p1
+		ORDER BY r.name`
+
+	var roles []string
+
+	// Try to get a direct connection to the database first (Azure SQL support)
+	db, err := c.GetDatabaseConnection(ctx, databaseName)
+	if err == nil {
+		defer db.Close()
+		rows, err := db.QueryContext(ctx, query, userName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user roles: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var roleName string
+			if err := rows.Scan(&roleName); err != nil {
+				return nil, fmt.Errorf("failed to scan role name: %w", err)
+			}
+			roles = append(roles, roleName)
+		}
+		return roles, rows.Err()
+	}
+
+	// Fallback to existing logic
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		return nil, fmt.Errorf("failed to switch database context: %w", err)
+	}
+
+	rows, err := conn.QueryContext(ctx, query, userName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user roles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var roleName string
+		if err := rows.Scan(&roleName); err != nil {
+			return nil, fmt.Errorf("failed to scan role name: %w", err)
+		}
+		roles = append(roles, roleName)
+	}
+	return roles, rows.Err()
+}
+
 // ServerRole represents a server role.
 type ServerRole struct {
 	PrincipalID int

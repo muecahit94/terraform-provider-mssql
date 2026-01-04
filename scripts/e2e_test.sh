@@ -232,11 +232,32 @@ EOF
         record_test "SQL Verify: Schema exists" "FAIL"
     fi
 
-    # Check role membership
+    # Check role membership (app_user in app_readers via OPTION 1: inline roles)
     if run_sql "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'app_readers' AND m.name = 'app_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
-        record_test "SQL Verify: Role membership" "PASS"
+        record_test "SQL Verify: app_user in app_readers (Option 1: inline roles)" "PASS"
     else
-        record_test "SQL Verify: Role membership" "FAIL"
+        record_test "SQL Verify: app_user in app_readers (Option 1: inline roles)" "FAIL"
+    fi
+
+    # Check writers role exists
+    if run_sql "SELECT 1 FROM sys.database_principals WHERE name = 'app_writers' AND type = 'R'" "application_db" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: app_writers role exists" "PASS"
+    else
+        record_test "SQL Verify: app_writers role exists" "FAIL"
+    fi
+
+    # Check test_user in app_readers (via OPTION 2: explicit role_member)
+    if run_sql "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'app_readers' AND m.name = 'test_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: test_user in app_readers (Option 2: role_member)" "PASS"
+    else
+        record_test "SQL Verify: test_user in app_readers (Option 2: role_member)" "FAIL"
+    fi
+
+    # Check test_user in app_writers (via OPTION 2: explicit role_member)
+    if run_sql "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'app_writers' AND m.name = 'test_user'" "application_db" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: test_user in app_writers (Option 2: role_member)" "PASS"
+    else
+        record_test "SQL Verify: test_user in app_writers (Option 2: role_member)" "FAIL"
     fi
 
     # Check permission

@@ -76,5 +76,6 @@ e2e-local:
 e2e-azure:
 	./scripts/e2e_test_azure.sh
 
-# Run full end-to-end test suite (local + azure)
-e2e-full: e2e-local e2e-azure
+# Run full end-to-end test suite (local + azure) with combined summary
+e2e-full:
+	./scripts/e2e_full.sh

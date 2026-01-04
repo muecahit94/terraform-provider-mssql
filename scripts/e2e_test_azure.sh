@@ -300,12 +300,12 @@ main() {
         log_record "SQL Verify: MI Role Permission" "FAIL"
     fi
 
-    # Check Role Assignment (MI in Role)
+    # Check Role Assignment (MI in Role via OPTION 2: explicit role_member)
     if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
         "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'managed_identity_role' AND m.name = '$MI_NAME'" | grep -v "Executed in" | grep -q "1"; then
-        log_record "SQL Verify: MI Role Membership" "PASS"
+        log_record "SQL Verify: MI Role Membership (Option 2: role_member)" "PASS"
     else
-        log_record "SQL Verify: MI Role Membership" "FAIL"
+        log_record "SQL Verify: MI Role Membership (Option 2: role_member)" "FAIL"
     fi
 
     # Check developer_role exists
@@ -314,6 +314,15 @@ main() {
         log_record "SQL Verify: Developer Role" "PASS"
     else
         log_record "SQL Verify: Developer Role" "FAIL"
+    fi
+
+    # Check Developer user in developer_role (via OPTION 1: inline roles)
+    DEVELOPER_EMAIL="${DEVELOPER_EMAIL:-}" # Get from env or leave empty
+    if [ -n "$DEVELOPER_EMAIL" ] || run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+        "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'developer_role'" | grep -v "Executed in" | grep -q "1"; then
+        log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "PASS"
+    else
+        log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "FAIL"
     fi
 
     # =========================================================================
