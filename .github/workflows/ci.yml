@@ -74,45 +74,17 @@ jobs:
         with:
           go-package: ./...
 
-  # Default build - only linux/amd64 (runs always)
+  # Build job - runs linux/amd64 by default, all platforms when build_all_platforms is true
   build:
-    name: Build (linux, amd64)
+    name: Build
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: false  # Disable caching to avoid tar errors
-
-      - name: Build
-        env:
-          GOOS: linux
-          GOARCH: amd64
-        run: go build -o terraform-provider-mssql
-
-  # Multi-platform builds - only when build_all_platforms is true
-  build-all:
-    name: Build (${{ matrix.goos }}, ${{ matrix.goarch }})
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_all_platforms == true }}
     strategy:
       matrix:
-        include:
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: arm
-            goarm: "7"
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
-            goarch: arm64
+        # Default: only linux/amd64
+        goos: [linux]
+        goarch: [amd64]
+        # Add all other platforms when build_all_platforms is true
+        include: ${{ github.event_name == 'workflow_dispatch' && inputs.build_all_platforms && fromJSON('[{"goos":"linux","goarch":"arm64"},{"goos":"linux","goarch":"arm","goarm":"7"},{"goos":"darwin","goarch":"amd64"},{"goos":"darwin","goarch":"arm64"},{"goos":"windows","goarch":"amd64"},{"goos":"windows","goarch":"arm64"}]') || fromJSON('[]') }}
     steps:
       - uses: actions/checkout@v4
 
