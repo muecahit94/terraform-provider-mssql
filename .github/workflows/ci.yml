@@ -5,7 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:
+    inputs:
+      build_all_platforms:
+        description: 'Build for all platforms (linux, darwin, windows on amd64/arm64)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -68,18 +74,45 @@ jobs:
         with:
           go-package: ./...
 
+  # Default build - only linux/amd64 (runs always)
   build:
-    name: Build
+    name: Build (linux, amd64)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: false  # Disable caching to avoid tar errors
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -o terraform-provider-mssql
+
+  # Multi-platform builds - only when build_all_platforms is true
+  build-all:
+    name: Build (${{ matrix.goos }}, ${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_all_platforms == true }}
     strategy:
       matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
         include:
-          # Add 32-bit ARM builds for Raspberry Pi
+          - goos: linux
+            goarch: arm64
           - goos: linux
             goarch: arm
-            goarm: "7"  # Raspberry Pi 2, 3, 4 (32-bit mode)
+            goarm: "7"
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
     steps:
       - uses: actions/checkout@v4
 
