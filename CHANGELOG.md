@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.1...v1.3.2) (2026-01-05)
+
+
+### Miscellaneous
+
+* support EXTERNAL_GROUP user type in user queries, implement state migration, and standardize Azure AD user ID format to a URL-based structure ([4571589](https://github.com/muecahit94/terraform-provider-mssql/commit/45715893ff5ea0c430463860824bbcd825f03afe))
+
 ## [1.3.1](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.0...v1.3.1) (2026-01-05)
 
 
