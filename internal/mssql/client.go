@@ -12,10 +12,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	mssqldb "github.com/microsoft/go-mssqldb"
+	// Import azuread package to register the azuresql driver
+
+	_ "github.com/microsoft/go-mssqldb/azuread"
 )
 
 // Client represents a connection to a SQL Server instance.
@@ -72,7 +71,7 @@ func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
 	var err error
 
 	if cfg.AzureAuth != nil {
-		db, err = connectWithAzureAuth(ctx, cfg)
+		db, err = connectWithAzureAuth(cfg, "")
 	} else if cfg.SQLAuth != nil {
 		db, err = connectWithSQLAuth(cfg)
 	} else {
@@ -118,10 +117,9 @@ func connectWithSQLAuth(cfg *Config) (*sql.DB, error) {
 }
 
 // connectWithAzureAuth establishes a connection using Azure AD authentication.
-func connectWithAzureAuth(ctx context.Context, cfg *Config) (*sql.DB, error) {
-	var cred azcore.TokenCredential
-	var err error
-
+// Uses the azuread driver from go-mssqldb with fedauth parameter for proper
+// Azure credential chain support (works with Azure CLI, Managed Identity, Service Principal, etc.)
+func connectWithAzureAuth(cfg *Config, databaseName string) (*sql.DB, error) {
 	// Check for environment variable override
 	clientID := cfg.AzureAuth.ClientID
 	clientSecret := cfg.AzureAuth.ClientSecret
@@ -137,39 +135,39 @@ func connectWithAzureAuth(ctx context.Context, cfg *Config) (*sql.DB, error) {
 		tenantID = os.Getenv("ARM_TENANT_ID")
 	}
 
+	query := url.Values{}
+	query.Add("app name", "terraform-provider-mssql")
+
+	if databaseName != "" {
+		query.Add("database", databaseName)
+	}
+
+	// Determine fedauth method based on available credentials
 	if clientID != "" && clientSecret != "" && tenantID != "" {
 		// Use Service Principal authentication
-		cred, err = azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create client secret credential: %w", err)
-		}
+		query.Add("fedauth", "ActiveDirectoryServicePrincipal")
+		query.Add("user id", clientID)
+		query.Add("password", clientSecret)
+		// Note: tenant_id is passed via environment variable AZURE_TENANT_ID
+		// or can be part of the client_id in some configurations
+		os.Setenv("AZURE_TENANT_ID", tenantID)
 	} else {
-		// Use default Azure credential chain
-		cred, err = azidentity.NewDefaultAzureCredential(nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create default Azure credential: %w", err)
-		}
+		// Use default Azure credential chain (Azure CLI, Managed Identity, etc.)
+		query.Add("fedauth", "ActiveDirectoryDefault")
 	}
 
-	// Get token for Azure SQL
-	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
-		Scopes: []string{"https://database.windows.net/.default"},
-	})
+	u := &url.URL{
+		Scheme:   "sqlserver",
+		Host:     fmt.Sprintf("%s:%d", cfg.Hostname, cfg.Port),
+		RawQuery: query.Encode(),
+	}
+
+	// Use azuresql driver (registered by importing github.com/microsoft/go-mssqldb/azuread)
+	db, err := sql.Open("azuresql", u.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure AD token: %w", err)
+		return nil, err
 	}
 
-	connector, err := mssqldb.NewAccessTokenConnector(
-		fmt.Sprintf("sqlserver://%s:%d?database=master&app+name=terraform-provider-mssql", cfg.Hostname, cfg.Port),
-		func() (string, error) {
-			return token.Token, nil
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create access token connector: %w", err)
-	}
-
-	db := sql.OpenDB(connector)
 	return db, nil
 }
 
@@ -194,62 +192,6 @@ func connectWithSQLAuthToDatabase(cfg *Config, databaseName string) (*sql.DB, er
 	return db, nil
 }
 
-// connectWithAzureAuthToDatabase establishes a connection to a specific database using Azure AD authentication.
-func connectWithAzureAuthToDatabase(ctx context.Context, cfg *Config, databaseName string) (*sql.DB, error) {
-	var cred azcore.TokenCredential
-	var err error
-
-	// Check for environment variable override
-	clientID := cfg.AzureAuth.ClientID
-	clientSecret := cfg.AzureAuth.ClientSecret
-	tenantID := cfg.AzureAuth.TenantID
-
-	if clientID == "" {
-		clientID = os.Getenv("ARM_CLIENT_ID")
-	}
-	if clientSecret == "" {
-		clientSecret = os.Getenv("ARM_CLIENT_SECRET")
-	}
-	if tenantID == "" {
-		tenantID = os.Getenv("ARM_TENANT_ID")
-	}
-
-	if clientID != "" && clientSecret != "" && tenantID != "" {
-		// Use Service Principal authentication
-		cred, err = azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create client secret credential: %w", err)
-		}
-	} else {
-		// Use default Azure credential chain
-		cred, err = azidentity.NewDefaultAzureCredential(nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create default Azure credential: %w", err)
-		}
-	}
-
-	// Get token for Azure SQL
-	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
-		Scopes: []string{"https://database.windows.net/.default"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure AD token: %w", err)
-	}
-
-	connector, err := mssqldb.NewAccessTokenConnector(
-		fmt.Sprintf("sqlserver://%s:%d?database=%s&app+name=terraform-provider-mssql", cfg.Hostname, cfg.Port, url.QueryEscape(databaseName)),
-		func() (string, error) {
-			return token.Token, nil
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create access token connector: %w", err)
-	}
-
-	db := sql.OpenDB(connector)
-	return db, nil
-}
-
 // GetDatabaseConnection creates a new connection to a specific database.
 // This is needed for Azure SQL Database which doesn't support the USE statement.
 func (c *Client) GetDatabaseConnection(ctx context.Context, databaseName string) (*sql.DB, error) {
@@ -261,7 +203,8 @@ func (c *Client) GetDatabaseConnection(ctx context.Context, databaseName string)
 	var err error
 
 	if c.config.AzureAuth != nil {
-		db, err = connectWithAzureAuthToDatabase(ctx, c.config, databaseName)
+		// Use the unified connectWithAzureAuth with database parameter
+		db, err = connectWithAzureAuth(c.config, databaseName)
 	} else if c.config.SQLAuth != nil {
 		db, err = connectWithSQLAuthToDatabase(c.config, databaseName)
 	} else {
