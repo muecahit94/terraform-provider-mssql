@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.0...v1.3.1) (2026-01-05)
+
+
+### Bug Fixes
+
+* change azure AD authentication to use `azuresql` driver with `fedauth` parameters ([508cc15](https://github.com/muecahit94/terraform-provider-mssql/commit/508cc15a53d8b07a975a57c43753aa88bd613b3b))
+
 ## [1.3.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.2.2...v1.3.0) (2026-01-04)
 
 
