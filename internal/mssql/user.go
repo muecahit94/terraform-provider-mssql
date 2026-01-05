@@ -74,7 +74,7 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E')`
+		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
 
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, userName)
 	if err != nil {
@@ -95,7 +95,7 @@ func (c *Client) getUserWithDB(ctx context.Context, db *sql.DB, userName string)
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E')`
+		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
 
 	row := db.QueryRowContext(ctx, query, userName)
 	return scanUser(row)
@@ -132,7 +132,7 @@ func (c *Client) GetUserByID(ctx context.Context, databaseName string, principal
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.principal_id = @p1 AND dp.type IN ('S', 'U', 'E')`
+		WHERE dp.principal_id = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
 
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
 	if err != nil {
@@ -182,7 +182,7 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.type IN ('S', 'U', 'E')
+		WHERE dp.type IN ('S', 'U', 'E', 'X') // X = EXTERNAL_GROUP
 		ORDER BY dp.name`
 
 	rows, err := conn.QueryContext(ctx, query)

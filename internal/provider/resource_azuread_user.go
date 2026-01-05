@@ -17,11 +17,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
 var _ resource.Resource = &AzureADUserResource{}
 var _ resource.ResourceWithImportState = &AzureADUserResource{}
+var _ resource.ResourceWithMoveState = &AzureADUserResource{}
 
 func NewAzureADUserResource() resource.Resource {
 	return &AzureADUserResource{}
@@ -112,7 +114,7 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 
 	objectID := data.ObjectID.ValueString()
 
-	user, err := r.client.CreateAzureADUser(ctx, mssql.CreateAzureADUserOptions{
+	_, err := r.client.CreateAzureADUser(ctx, mssql.CreateAzureADUserOptions{
 		DatabaseName:  data.DatabaseName.ValueString(),
 		UserName:      data.Name.ValueString(),
 		ObjectID:      objectID,
@@ -139,7 +141,7 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 		}
 	}
 
-	data.ID = types.StringValue(fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))
+	data.ID = types.StringValue(fmt.Sprintf("sqlserver://%s:%d/%s/%s", r.client.Hostname(), r.client.Port(), data.DatabaseName.ValueString(), data.Name.ValueString()))
 	data.ObjectID = types.StringValue(objectID)
 
 	// Set roles in state
@@ -173,6 +175,8 @@ func (r *AzureADUserResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
+	// Update ID with proper URL format
+	data.ID = types.StringValue(fmt.Sprintf("sqlserver://%s:%d/%s/%s", r.client.Hostname(), r.client.Port(), data.DatabaseName.ValueString(), data.Name.ValueString()))
 	data.DefaultSchema = types.StringValue(user.DefaultSchemaName)
 
 	// Read user's roles
@@ -295,9 +299,195 @@ func (r *AzureADUserResource) ImportState(ctx context.Context, req resource.Impo
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))...)
+	// Use URL-based ID format
+	id := fmt.Sprintf("sqlserver://%s:%d/%s/%s", r.client.Hostname(), r.client.Port(), parts[0], user.Name)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database_name"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), user.Name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_id"), "")...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_schema"), user.DefaultSchemaName)...)
+}
+
+// MoveState implements resource.ResourceWithMoveState.
+// This allows migrating state from other providers' mssql_user resources.
+func (r *AzureADUserResource) MoveState(ctx context.Context) []resource.StateMover {
+	return []resource.StateMover{
+		{
+			// Support moving from betr-io/mssql mssql_user
+			StateMover: func(ctx context.Context, req resource.MoveStateRequest, resp *resource.MoveStateResponse) {
+				// Check if this is from a supported source
+				if req.SourceTypeName != "mssql_user" {
+					return
+				}
+
+				// Accept from betr-io/mssql provider (allow any hostname)
+				if !strings.HasSuffix(req.SourceProviderAddress, "betr-io/mssql") {
+					return
+				}
+
+				// Parse the source state using raw state
+				// betr-io/mssql mssql_user has these attributes:
+				// - database (string)
+				// - username (string)
+				// - default_schema (string)
+				// - roles (list of strings)
+				// - principal_id (number)
+				// - sid (string)
+				rawStateValue, err := req.SourceRawState.Unmarshal(tftypes.Object{
+					AttributeTypes: map[string]tftypes.Type{
+						"id":                  tftypes.String,
+						"database":            tftypes.String,
+						"username":            tftypes.String,
+						"password":            tftypes.String,
+						"login_name":          tftypes.String,
+						"default_schema":      tftypes.String,
+						"default_language":    tftypes.String,
+						"roles":               tftypes.List{ElementType: tftypes.String},
+						"principal_id":        tftypes.Number,
+						"sid":                 tftypes.String,
+						"authentication_type": tftypes.String,
+						"object_id":           tftypes.String,
+						// Server block is a list of objects with nested auth blocks
+						"server": tftypes.List{ElementType: tftypes.Object{
+							AttributeTypes: map[string]tftypes.Type{
+								"host": tftypes.String,
+								"port": tftypes.String,
+								"login": tftypes.List{ElementType: tftypes.Object{
+									AttributeTypes: map[string]tftypes.Type{
+										"username":  tftypes.String,
+										"password":  tftypes.String,
+										"object_id": tftypes.String,
+									},
+								}},
+								"azure_login": tftypes.List{ElementType: tftypes.Object{
+									AttributeTypes: map[string]tftypes.Type{
+										"tenant_id":     tftypes.String,
+										"client_id":     tftypes.String,
+										"client_secret": tftypes.String,
+									},
+								}},
+								"azuread_default_chain_auth": tftypes.List{ElementType: tftypes.Object{
+									AttributeTypes: map[string]tftypes.Type{},
+								}},
+								"azuread_managed_identity_auth": tftypes.List{ElementType: tftypes.Object{
+									AttributeTypes: map[string]tftypes.Type{
+										"user_id": tftypes.String,
+									},
+								}},
+							},
+						}},
+						// Timeouts block
+						"timeouts": tftypes.Object{
+							AttributeTypes: map[string]tftypes.Type{
+								"create": tftypes.String,
+								"read":   tftypes.String,
+								"update": tftypes.String,
+								"delete": tftypes.String,
+							},
+						},
+					},
+				})
+				if err != nil {
+					resp.Diagnostics.AddError(
+						"Unable to Unmarshal Source State",
+						err.Error(),
+					)
+					return
+				}
+
+				var rawState map[string]tftypes.Value
+				if err := rawStateValue.As(&rawState); err != nil {
+					resp.Diagnostics.AddError(
+						"Unable to Convert Source State",
+						err.Error(),
+					)
+					return
+				}
+
+				// Extract required values
+				var database *string
+				if err := rawState["database"].As(&database); err != nil {
+					resp.Diagnostics.AddAttributeError(
+						path.Root("database_name"),
+						"Unable to Convert Source State",
+						err.Error(),
+					)
+					return
+				}
+
+				var username *string
+				if err := rawState["username"].As(&username); err != nil {
+					resp.Diagnostics.AddAttributeError(
+						path.Root("name"),
+						"Unable to Convert Source State",
+						err.Error(),
+					)
+					return
+				}
+
+				var defaultSchema *string
+				if err := rawState["default_schema"].As(&defaultSchema); err != nil {
+					// Use dbo as default if not available
+					dbo := "dbo"
+					defaultSchema = &dbo
+				}
+
+				// Extract roles if available
+				var rolesList []string
+				if rawState["roles"].IsKnown() && !rawState["roles"].IsNull() {
+					var rolesValues []tftypes.Value
+					if err := rawState["roles"].As(&rolesValues); err == nil {
+						for _, rv := range rolesValues {
+							var role string
+							if err := rv.As(&role); err == nil {
+								rolesList = append(rolesList, role)
+							}
+						}
+					}
+				}
+
+				// Extract object_id if available
+				var objectID *string
+				if rawState["object_id"].IsKnown() && !rawState["object_id"].IsNull() {
+					if err := rawState["object_id"].As(&objectID); err != nil {
+						objectID = nil
+					}
+				}
+
+				// Build target state
+				// We need to generate an ID - use a placeholder that will be updated on first read
+				idPlaceholder := "migrated/pending"
+
+				var rolesSet types.Set
+				if len(rolesList) > 0 {
+					roleValues := make([]attr.Value, len(rolesList))
+					for i, role := range rolesList {
+						roleValues[i] = types.StringValue(role)
+					}
+					rolesSet = types.SetValueMust(types.StringType, roleValues)
+				} else {
+					rolesSet = types.SetValueMust(types.StringType, []attr.Value{})
+				}
+
+				// Use object_id from source if available, otherwise empty string
+				var objectIDValue types.String
+				if objectID != nil && *objectID != "" {
+					objectIDValue = types.StringValue(*objectID)
+				} else {
+					objectIDValue = types.StringValue("")
+				}
+
+				targetStateData := AzureADUserResourceModel{
+					ID:            types.StringValue(idPlaceholder),
+					DatabaseName:  types.StringPointerValue(database),
+					Name:          types.StringPointerValue(username),
+					ObjectID:      objectIDValue,
+					DefaultSchema: types.StringPointerValue(defaultSchema),
+					Roles:         rolesSet,
+				}
+
+				resp.Diagnostics.Append(resp.TargetState.Set(ctx, targetStateData)...)
+			},
+		},
+	}
 }
