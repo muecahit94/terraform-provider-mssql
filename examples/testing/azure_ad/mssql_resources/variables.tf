@@ -83,3 +83,13 @@ variable "mi_object_id" {
   type        = string
   default     = ""
 }
+
+# =============================================================================
+# Azure AD Group Variables
+# =============================================================================
+
+variable "group_name" {
+  description = "Name of the Azure AD group to create as database user (optional)"
+  type        = string
+  default     = ""
+}

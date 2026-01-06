@@ -1,4 +1,4 @@
-.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev e2e-local e2e-azure e2e-full
+.PHONY: build test testacc generate docs install lint fmt clean docker-up docker-down dev e2e-local e2e-azure e2e-full azure-infra-up azure-infra-down
 
 HOSTNAME=registry.terraform.io
 NAMESPACE=muecahit94
@@ -79,3 +79,12 @@ e2e-azure:
 # Run full end-to-end test suite (local + azure) with combined summary
 e2e-full:
 	./scripts/e2e_full.sh
+
+# Azure infrastructure management
+AZURE_INFRA_DIR=examples/testing/azure_ad/infrastructure
+
+azure-infra-up:
+	cd $(AZURE_INFRA_DIR) && terraform init && terraform apply -auto-approve
+
+azure-infra-down:
+	cd $(AZURE_INFRA_DIR) && terraform destroy -auto-approve

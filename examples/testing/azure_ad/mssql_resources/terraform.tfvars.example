@@ -45,3 +45,12 @@ database_name = "testdb"
 
 # app_name      = "my-application"
 # app_client_id = "00000000-0000-0000-0000-000000000000"
+
+# =============================================================================
+# Optional: Azure AD Group
+# =============================================================================
+
+# Create an Azure AD group as a database user
+# To get group name: az ad group show --group "group-name" --query displayName -o tsv
+
+# group_name = "my-azure-ad-group"

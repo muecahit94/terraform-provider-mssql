@@ -66,10 +66,8 @@ output "next_step" {
 
     # Create terraform.tfvars with:
     sql_hostname = "${azurerm_mssql_server.main.fully_qualified_domain_name}"
-    sql_hostname = "${azurerm_mssql_server.main.fully_qualified_domain_name}"
     database_name = "${azurerm_mssql_database.main.name}"
     mi_name = "${azurerm_user_assigned_identity.example.name}"
-    mi_client_id = "${azurerm_user_assigned_identity.example.client_id}"
     mi_object_id = "${azurerm_user_assigned_identity.example.principal_id}"
 
     terraform init

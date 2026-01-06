@@ -123,3 +123,21 @@ resource "mssql_database_role_member" "mi_role_member" {
   role_name     = mssql_database_role.mi_role[0].name
   member_name   = mssql_azuread_user.uami[0].name
 }
+
+# =============================================================================
+# Azure AD Group User (optional)
+# =============================================================================
+
+locals {
+  create_group = var.group_name != ""
+}
+
+# Create a database user for an Azure AD group
+resource "mssql_azuread_user" "group" {
+  count = local.create_group ? 1 : 0
+
+  database_name  = var.database_name
+  name           = var.group_name
+  default_schema = "dbo"
+  roles          = ["db_datareader", "db_datawriter"]
+}
