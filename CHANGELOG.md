@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.2...v1.3.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **mssql_script:** [#19](https://github.com/muecahit94/terraform-provider-mssql/issues/19) - ensure consistent connection handling during SQL script execution ([093b891](https://github.com/muecahit94/terraform-provider-mssql/commit/093b891172672031f255e7c3c3ee975962ceee44))
+* **mssql_script:** [#19](https://github.com/muecahit94/terraform-provider-mssql/issues/19) - ensure consistent connection handling during SQL script execution ([2816a95](https://github.com/muecahit94/terraform-provider-mssql/commit/2816a95d2312745542b8911a27216824f5fdb87e))
+
+
+### Miscellaneous
+
+* **test:** [#19](https://github.com/muecahit94/terraform-provider-mssql/issues/19) - add regression test for connection drops and update E2E script to support multiple SQL CLI tools ([86b865d](https://github.com/muecahit94/terraform-provider-mssql/commit/86b865d4beb6a5450885c6bd00c87758a3eb43f1))
+
 ## [1.3.2](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.1...v1.3.2) (2026-01-05)
 
 
