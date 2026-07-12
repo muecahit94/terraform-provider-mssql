@@ -1,26 +1,40 @@
-run:
-  timeout: 5m
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
+    - gocritic
     - govet
     - ineffassign
-    - staticcheck
     - misspell
+    - staticcheck
     - unconvert
-    - gocritic
-    - gofmt
     - unused
-
-linters-settings:
-  gocritic:
-    disabled-checks:
-      - ifElseChain
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
