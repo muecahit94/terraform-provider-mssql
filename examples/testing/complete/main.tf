@@ -117,3 +117,39 @@ resource "mssql_schema_permission" "test_select" {
   permission        = "SELECT"
   with_grant_option = true
 }
+
+# =============================================================================
+# OPTION 3: Scripts with connection drops (Issue #19)
+# =============================================================================
+
+# Block 1: Changes database configuration (triggers connection drops)
+resource "mssql_script" "enable_service_broker" {
+  database_name = mssql_database.app.name
+
+  create_script = <<-SQL
+    IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '${mssql_database.app.name}' AND is_broker_enabled = 0)
+    BEGIN
+        ALTER DATABASE [${mssql_database.app.name}] SET ENABLE_BROKER WITH ROLLBACK IMMEDIATE;
+    END
+  SQL
+
+  read_script   = "SELECT 1 FROM sys.databases WHERE name = '${mssql_database.app.name}' AND is_broker_enabled = 1"
+  delete_script = "ALTER DATABASE [${mssql_database.app.name}] SET DISABLE_BROKER;"
+}
+
+# Block 2: Verify database context restoration after connection drop
+resource "mssql_script" "create_message_type" {
+  database_name = mssql_database.app.name
+
+  create_script = <<-SQL
+    IF NOT EXISTS (SELECT 1 FROM sys.service_message_types WHERE name = 'MyCustomMessage')
+    BEGIN
+        CREATE MESSAGE TYPE [MyCustomMessage] VALIDATION = NONE;
+    END
+  SQL
+
+  read_script   = "SELECT 1 FROM sys.service_message_types WHERE name = 'MyCustomMessage'"
+  delete_script = "DROP MESSAGE TYPE [MyCustomMessage];"
+
+  depends_on = [mssql_script.enable_service_broker]   
+}

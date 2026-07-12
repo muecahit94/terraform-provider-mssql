@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E2E Test Suite for MSSQL Terraform Provider
 # This script runs comprehensive end-to-end tests
-# Requires: bash 4.0+, docker, terraform, mssql-cli, go
+# Requires: bash 4.0+, docker, terraform, mssql-cli/sqlcmd, go
 
 set -e
 
@@ -69,7 +69,17 @@ record_test() {
 run_sql() {
     local query="$1"
     local database="${2:-master}"
-    mssql -u sa -p "$SA_PASSWORD" -d "$database" -q "$query" 2>/dev/null
+    
+    if command -v sqlcmd &> /dev/null; then
+        SQLCMDPASSWORD="$SA_PASSWORD" sqlcmd -S localhost -U sa -d "$database" -Q "$query" -C 2>/dev/null
+    elif command -v mssql &> /dev/null; then
+        mssql -u sa -p "$SA_PASSWORD" -d "$database" -q "$query" 2>/dev/null
+    elif command -v mssql-cli &> /dev/null; then
+        mssql-cli -S localhost -U sa -P "$SA_PASSWORD" -d "$database" -Q "$query" 2>/dev/null
+    else
+        echo "Error: No SQL CLI tool found (sqlcmd, mssql, or mssql-cli)" >&2
+        return 1
+    fi
 }
 
 wait_for_sql() {
@@ -283,6 +293,14 @@ EOF
     else
         log_error "Expected app_user to own the app schema"
         record_test "SQL Verify: app_user schema owner" "FAIL"
+    fi
+
+    # Check issue 19: connection drop / Service Broker
+    if run_sql "SELECT 1 FROM sys.service_message_types WHERE name = 'MyCustomMessage'" "application_db" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: Service Message Type exists (Issue #19)" "PASS"
+    else
+        log_error "Expected MyCustomMessage message type to exist"
+        record_test "SQL Verify: Service Message Type exists (Issue #19)" "FAIL"
     fi
 
     # Check idempotency
