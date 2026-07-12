@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.3...v1.3.4) (2026-07-12)
+
+
+### Bug Fixes
+
+* **update:** upgrade Go version to 1.25.0 and update project dependen… ([36afb55](https://github.com/muecahit94/terraform-provider-mssql/commit/36afb55e357b0f0b02bdccef4c83678958f75e58))
+
 ## [1.3.3](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.2...v1.3.3) (2026-07-12)
 
 
