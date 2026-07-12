@@ -29,13 +29,24 @@ type ScriptState struct {
 
 // ExecuteScript executes a SQL script and returns the results as a map.
 func (c *Client) ExecuteScript(ctx context.Context, databaseName, script string) (map[string]string, error) {
+	// Use a dedicated connection so that the USE statement and the script
+	// execution are guaranteed to run on the same connection. This prevents
+	// the database context from being lost when the pool hands out a
+	// different connection (e.g. after a server-side connection reset caused
+	// by ALTER DATABASE … WITH ROLLBACK IMMEDIATE).
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
 	if databaseName != "" {
-		if err := c.UseDatabase(ctx, databaseName); err != nil {
-			return nil, err
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+			return nil, fmt.Errorf("failed to switch database context: %w", err)
 		}
 	}
 
-	rows, err := c.QueryContext(ctx, script)
+	rows, err := conn.QueryContext(ctx, script)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute script: %w", err)
 	}
@@ -78,14 +89,24 @@ func (c *Client) ExecuteScript(ctx context.Context, databaseName, script string)
 
 // ExecuteScriptNoResult executes a SQL script without returning results.
 func (c *Client) ExecuteScriptNoResult(ctx context.Context, databaseName, script string) error {
+	// Use a dedicated connection so that the USE statement and the script
+	// execution are guaranteed to run on the same connection. This prevents
+	// the database context from being lost when the pool hands out a
+	// different connection (e.g. after a server-side connection reset caused
+	// by ALTER DATABASE … WITH ROLLBACK IMMEDIATE).
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
 	if databaseName != "" {
-		if err := c.UseDatabase(ctx, databaseName); err != nil {
-			return err
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+			return fmt.Errorf("failed to switch database context: %w", err)
 		}
 	}
 
-	_, err := c.ExecContext(ctx, script)
-	if err != nil {
+	if _, err := conn.ExecContext(ctx, script); err != nil {
 		return fmt.Errorf("failed to execute script: %w", err)
 	}
 
