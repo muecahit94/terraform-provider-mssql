@@ -153,3 +153,18 @@ resource "mssql_script" "create_message_type" {
 
   depends_on = [mssql_script.enable_service_broker]   
 }
+
+# =============================================================================
+# SQL Login with custom SID
+# =============================================================================
+
+resource "mssql_sql_login" "sid_login" {
+  name     = "sid_custom_login"
+  password = var.app_password
+  sid      = "0x0123456789ABCDEF0123456789ABCDEF"
+}
+
+data "mssql_sql_login" "sid_login" {
+  name       = mssql_sql_login.sid_login.name
+  depends_on = [mssql_sql_login.sid_login]
+}

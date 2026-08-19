@@ -20,12 +20,23 @@ resource "mssql_sql_login" "example" {
 }
 ```
 
+### Login with Custom SID
+
+```hcl
+resource "mssql_sql_login" "with_sid" {
+  name     = "mirrored_login"
+  password = "SecurePassword123!"
+  sid      = "0x0123456789ABCDEF0123456789ABCDEF"
+}
+```
+
 ### Login with All Options
 
 ```hcl
 resource "mssql_sql_login" "full_example" {
   name                     = "app_login"
   password                 = "SecurePassword123!"
+  sid                      = "0x0123456789ABCDEF0123456789ABCDEF"
   default_database         = mssql_database.app.name
   check_expiration_enabled = true
   check_policy_enabled     = true
@@ -37,6 +48,7 @@ resource "mssql_sql_login" "full_example" {
 
 - `name` - (Required) The name of the login. Changing this forces a new resource.
 - `password` - (Required) The password for the login.
+- `sid` - (Optional) The SID (Security Identifier) of the login in hexadecimal format (e.g., `0x0123456789ABCDEF0123456789ABCDEF`). Changing this forces a new resource. If not specified, SQL Server generates a SID automatically.
 - `default_database` - (Optional) The default database for the login. Defaults to `master`.
 - `default_language` - (Optional) The default language for the login.
 - `check_expiration_enabled` - (Optional) Whether password expiration is checked. Defaults to `false`.
@@ -46,6 +58,7 @@ resource "mssql_sql_login" "full_example" {
 ## Attribute Reference
 
 - `id` - The login principal ID.
+- `sid` - The SID (Security Identifier) of the SQL login in hexadecimal format.
 
 ## Import
 
