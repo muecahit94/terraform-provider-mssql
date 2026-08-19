@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.4...v1.4.0) (2026-08-19)
+
+
+### Features
+
+* **mssql_sql_login:** [#24](https://github.com/muecahit94/terraform-provider-mssql/issues/24) - support optional custom SID for SQL logins with normalization and state verification ([ae85f30](https://github.com/muecahit94/terraform-provider-mssql/commit/ae85f30cb644e3c899b3d924ce75824bc9904241))
+* **mssql_sql_login:** [#24](https://github.com/muecahit94/terraform-provider-mssql/issues/24) - support optional custom SID for SQL logins with normalization and state verification ([dda7509](https://github.com/muecahit94/terraform-provider-mssql/commit/dda75093991a9ff413bd7254ce7fc693e833b086))
+
+
+### Miscellaneous
+
+* update go dependencies for x/text, genproto, grpc, and protobuf ([813e899](https://github.com/muecahit94/terraform-provider-mssql/commit/813e899f24329bdf5a8511998d7c7efe5d4ea3c2))
+
 ## [1.3.4](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.3...v1.3.4) (2026-07-12)
 
 
