@@ -28,6 +28,7 @@ output "is_disabled" {
 ## Attribute Reference
 
 - `id` - The login principal ID.
+- `sid` - The SID (Security Identifier) of the SQL login in hexadecimal format.
 - `default_database` - The default database.
 - `default_language` - The default language.
 - `check_expiration_enabled` - Whether password expiration is checked.

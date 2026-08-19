@@ -12,3 +12,8 @@ output "user_name" {
   description = "The user name"
   value       = mssql_sql_user.app.name
 }
+
+output "sid_login_sid" {
+  description = "The SID of the custom SID login"
+  value       = data.mssql_sql_login.sid_login.sid
+}

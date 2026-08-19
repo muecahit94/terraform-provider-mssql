@@ -6,18 +6,49 @@ package mssql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // SQLLogin represents a SQL Server login.
 type SQLLogin struct {
 	PrincipalID            int
 	Name                   string
+	SID                    string
 	DefaultDatabaseName    string
 	DefaultLanguageName    string
 	CheckExpirationEnabled bool
 	CheckPolicyEnabled     bool
 	IsDisabled             bool
+}
+
+// FormatSID formats a binary SID as a hexadecimal string with 0x prefix (e.g. 0x010500...).
+func FormatSID(sid []byte) string {
+	if len(sid) == 0 {
+		return ""
+	}
+	return "0x" + strings.ToUpper(hex.EncodeToString(sid))
+}
+
+// NormalizeSID validates and standardizes a hex SID string into 0xUPPERCASE format.
+func NormalizeSID(sid string) (string, error) {
+	clean := strings.TrimSpace(sid)
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
+		clean = clean[2:]
+	}
+	clean = strings.ReplaceAll(clean, "-", "")
+
+	bytes, err := hex.DecodeString(clean)
+	if err != nil {
+		return "", fmt.Errorf("invalid SID format '%s': must be a valid hexadecimal string", sid)
+	}
+
+	if len(bytes) != 16 {
+		return "", fmt.Errorf("invalid SID length (%d bytes, %d characters): SQL Server requires binary(16) (32 hex characters)", len(bytes), len(clean))
+	}
+
+	return "0x" + strings.ToUpper(hex.EncodeToString(bytes)), nil
 }
 
 // GetSQLLogin retrieves a SQL login by name.
@@ -26,6 +57,7 @@ func (c *Client) GetSQLLogin(ctx context.Context, name string) (*SQLLogin, error
 		SELECT
 			principal_id,
 			name,
+			sid,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
@@ -36,9 +68,11 @@ func (c *Client) GetSQLLogin(ctx context.Context, name string) (*SQLLogin, error
 	row := c.QueryRowContext(ctx, query, name)
 
 	var login SQLLogin
+	var sidBytes []byte
 	err := row.Scan(
 		&login.PrincipalID,
 		&login.Name,
+		&sidBytes,
 		&login.DefaultDatabaseName,
 		&login.DefaultLanguageName,
 		&login.CheckExpirationEnabled,
@@ -52,6 +86,7 @@ func (c *Client) GetSQLLogin(ctx context.Context, name string) (*SQLLogin, error
 		return nil, fmt.Errorf("failed to get SQL login: %w", err)
 	}
 
+	login.SID = FormatSID(sidBytes)
 	return &login, nil
 }
 
@@ -61,6 +96,7 @@ func (c *Client) GetSQLLoginByID(ctx context.Context, id int) (*SQLLogin, error)
 		SELECT
 			principal_id,
 			name,
+			sid,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
@@ -71,9 +107,11 @@ func (c *Client) GetSQLLoginByID(ctx context.Context, id int) (*SQLLogin, error)
 	row := c.QueryRowContext(ctx, query, id)
 
 	var login SQLLogin
+	var sidBytes []byte
 	err := row.Scan(
 		&login.PrincipalID,
 		&login.Name,
+		&sidBytes,
 		&login.DefaultDatabaseName,
 		&login.DefaultLanguageName,
 		&login.CheckExpirationEnabled,
@@ -87,6 +125,7 @@ func (c *Client) GetSQLLoginByID(ctx context.Context, id int) (*SQLLogin, error)
 		return nil, fmt.Errorf("failed to get SQL login: %w", err)
 	}
 
+	login.SID = FormatSID(sidBytes)
 	return &login, nil
 }
 
@@ -96,6 +135,7 @@ func (c *Client) ListSQLLogins(ctx context.Context) ([]SQLLogin, error) {
 		SELECT
 			principal_id,
 			name,
+			sid,
 			ISNULL(default_database_name, 'master'),
 			ISNULL(default_language_name, ''),
 			ISNULL(is_expiration_checked, 0),
@@ -112,9 +152,11 @@ func (c *Client) ListSQLLogins(ctx context.Context) ([]SQLLogin, error) {
 	var logins []SQLLogin
 	for rows.Next() {
 		var login SQLLogin
+		var sidBytes []byte
 		if err := rows.Scan(
 			&login.PrincipalID,
 			&login.Name,
+			&sidBytes,
 			&login.DefaultDatabaseName,
 			&login.DefaultLanguageName,
 			&login.CheckExpirationEnabled,
@@ -123,6 +165,7 @@ func (c *Client) ListSQLLogins(ctx context.Context) ([]SQLLogin, error) {
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan SQL login: %w", err)
 		}
+		login.SID = FormatSID(sidBytes)
 		logins = append(logins, login)
 	}
 
@@ -133,6 +176,7 @@ func (c *Client) ListSQLLogins(ctx context.Context) ([]SQLLogin, error) {
 type CreateSQLLoginOptions struct {
 	Name                   string
 	Password               string
+	SID                    string
 	DefaultDatabase        string
 	DefaultLanguage        string
 	CheckExpirationEnabled bool
@@ -157,6 +201,14 @@ func (c *Client) CreateSQLLogin(ctx context.Context, opts CreateSQLLoginOptions)
 		boolToOnOff(opts.CheckExpirationEnabled),
 		boolToOnOff(opts.CheckPolicyEnabled),
 	)
+
+	if opts.SID != "" {
+		normSID, err := NormalizeSID(opts.SID)
+		if err != nil {
+			return nil, err
+		}
+		query += fmt.Sprintf(", SID = %s", normSID)
+	}
 
 	if opts.DefaultLanguage != "" {
 		query += fmt.Sprintf(", DEFAULT_LANGUAGE = [%s]", opts.DefaultLanguage)

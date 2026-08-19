@@ -35,11 +35,35 @@ type SQLLoginResourceModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	Password               types.String `tfsdk:"password"`
+	SID                    types.String `tfsdk:"sid"`
 	DefaultDatabase        types.String `tfsdk:"default_database"`
 	DefaultLanguage        types.String `tfsdk:"default_language"`
 	CheckExpirationEnabled types.Bool   `tfsdk:"check_expiration_enabled"`
 	CheckPolicyEnabled     types.Bool   `tfsdk:"check_policy_enabled"`
 	IsDisabled             types.Bool   `tfsdk:"is_disabled"`
+}
+
+type sidPlanModifier struct{}
+
+func (m sidPlanModifier) Description(ctx context.Context) string {
+	return "Suppresses diffs when the planned SID and state SID are semantically equivalent."
+}
+
+func (m sidPlanModifier) MarkdownDescription(ctx context.Context) string {
+	return "Suppresses diffs when the planned SID and state SID are semantically equivalent."
+}
+
+func (m sidPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+
+	normState, errState := mssql.NormalizeSID(req.StateValue.ValueString())
+	normPlan, errPlan := mssql.NormalizeSID(req.PlanValue.ValueString())
+
+	if errState == nil && errPlan == nil && normState == normPlan {
+		resp.PlanValue = req.StateValue
+	}
 }
 
 func (r *SQLLoginResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -68,6 +92,16 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 				Description: "The password for the login.",
 				Required:    true,
 				Sensitive:   true,
+			},
+			"sid": schema.StringAttribute{
+				Description: "The SID (Security Identifier) of the SQL login in hexadecimal format (e.g., 0x0105...). Changing this forces a new resource to be created.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					sidPlanModifier{},
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"default_database": schema.StringAttribute{
 				Description: "The default database for the login.",
@@ -134,6 +168,7 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 	opts := mssql.CreateSQLLoginOptions{
 		Name:                   data.Name.ValueString(),
 		Password:               data.Password.ValueString(),
+		SID:                    data.SID.ValueString(),
 		DefaultDatabase:        data.DefaultDatabase.ValueString(),
 		DefaultLanguage:        data.DefaultLanguage.ValueString(),
 		CheckExpirationEnabled: data.CheckExpirationEnabled.ValueBool(),
@@ -160,6 +195,7 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
+	data.SID = types.StringValue(login.SID)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -203,6 +239,7 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 	// Update state with current values
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
 	data.Name = types.StringValue(login.Name)
+	data.SID = types.StringValue(login.SID)
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabaseName)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 	data.CheckExpirationEnabled = types.BoolValue(login.CheckExpirationEnabled)
@@ -272,6 +309,7 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 
 	// Update state with actual values from the server to resolve "known after apply" values
+	data.SID = types.StringValue(login.SID)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -310,6 +348,7 @@ func (r *SQLLoginResource) ImportState(ctx context.Context, req resource.ImportS
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), strconv.Itoa(login.PrincipalID))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), login.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("sid"), login.SID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("password"), "")...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_database"), login.DefaultDatabaseName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_language"), login.DefaultLanguageName)...)

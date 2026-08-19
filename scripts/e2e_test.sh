@@ -303,6 +303,14 @@ EOF
         record_test "SQL Verify: Service Message Type exists (Issue #19)" "FAIL"
     fi
 
+    # Check custom SID login
+    if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'sid_custom_login' AND sid = 0x0123456789ABCDEF0123456789ABCDEF" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: Login with custom SID exists and matches" "PASS"
+    else
+        log_error "Expected sid_custom_login to exist with SID 0x0123456789ABCDEF0123456789ABCDEF"
+        record_test "SQL Verify: Login with custom SID exists and matches" "FAIL"
+    fi
+
     # Check idempotency
     log_info "Checking idempotency..."
     local plan_output

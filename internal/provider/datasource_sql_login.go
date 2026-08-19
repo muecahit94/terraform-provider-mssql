@@ -27,6 +27,7 @@ type SQLLoginDataSource struct {
 type SQLLoginDataSourceModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
+	SID                    types.String `tfsdk:"sid"`
 	DefaultDatabase        types.String `tfsdk:"default_database"`
 	DefaultLanguage        types.String `tfsdk:"default_language"`
 	CheckExpirationEnabled types.Bool   `tfsdk:"check_expiration_enabled"`
@@ -44,6 +45,7 @@ func (d *SQLLoginDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 		Attributes: map[string]schema.Attribute{
 			"id":                       schema.StringAttribute{Computed: true},
 			"name":                     schema.StringAttribute{Required: true},
+			"sid":                      schema.StringAttribute{Description: "The SID (Security Identifier) of the SQL login in hexadecimal format.", Computed: true},
 			"default_database":         schema.StringAttribute{Computed: true},
 			"default_language":         schema.StringAttribute{Computed: true},
 			"check_expiration_enabled": schema.BoolAttribute{Computed: true},
@@ -83,6 +85,7 @@ func (d *SQLLoginDataSource) Read(ctx context.Context, req datasource.ReadReques
 	}
 
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
+	data.SID = types.StringValue(login.SID)
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabaseName)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 	data.CheckExpirationEnabled = types.BoolValue(login.CheckExpirationEnabled)
@@ -120,6 +123,7 @@ func (d *SQLLoginsDataSource) Schema(ctx context.Context, req datasource.SchemaR
 					Attributes: map[string]schema.Attribute{
 						"id":                       schema.StringAttribute{Computed: true},
 						"name":                     schema.StringAttribute{Computed: true},
+						"sid":                      schema.StringAttribute{Description: "The SID (Security Identifier) of the SQL login in hexadecimal format.", Computed: true},
 						"default_database":         schema.StringAttribute{Computed: true},
 						"default_language":         schema.StringAttribute{Computed: true},
 						"check_expiration_enabled": schema.BoolAttribute{Computed: true},
@@ -157,6 +161,7 @@ func (d *SQLLoginsDataSource) Read(ctx context.Context, req datasource.ReadReque
 		data.Logins = append(data.Logins, SQLLoginDataSourceModel{
 			ID:                     types.StringValue(strconv.Itoa(login.PrincipalID)),
 			Name:                   types.StringValue(login.Name),
+			SID:                    types.StringValue(login.SID),
 			DefaultDatabase:        types.StringValue(login.DefaultDatabaseName),
 			DefaultLanguage:        types.StringValue(login.DefaultLanguageName),
 			CheckExpirationEnabled: types.BoolValue(login.CheckExpirationEnabled),
