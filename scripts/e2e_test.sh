@@ -311,6 +311,22 @@ EOF
         record_test "SQL Verify: Login with custom SID exists and matches" "FAIL"
     fi
 
+    # Check login created from a write-only password
+    if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'wo_password_login'" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: Login with write-only password exists" "PASS"
+    else
+        log_error "Expected wo_password_login to exist"
+        record_test "SQL Verify: Login with write-only password exists" "FAIL"
+    fi
+
+    # The whole point of password_wo: the value must not reach the state file
+    if grep -F -q 'WriteOnlyP@ssw0rd123!' terraform.tfstate; then
+        log_error "Expected the write-only password to be absent from terraform.tfstate"
+        record_test "Write-Only Password: absent from state" "FAIL"
+    else
+        record_test "Write-Only Password: absent from state" "PASS"
+    fi
+
     # Check idempotency
     log_info "Checking idempotency..."
     local plan_output
@@ -319,6 +335,23 @@ EOF
         record_test "Complete Example: Idempotency" "PASS"
     else
         record_test "Complete Example: Idempotency" "FAIL"
+    fi
+
+    # Terraform cannot diff a write-only value, so only a password_wo_version
+    # change may rotate the password on the server.
+    log_info "Checking write-only password rotation..."
+    local wo_hash_query="SELECT CONVERT(varchar(max), password_hash, 1) FROM sys.sql_logins WHERE name = 'wo_password_login'"
+    local wo_hash_before wo_hash_after
+    wo_hash_before=$(run_sql "$wo_hash_query" 2>/dev/null | grep -o '0x[0-9A-Fa-f]*' | head -1)
+
+    apply_output=$(terraform apply -auto-approve -var 'wo_password=RotatedP@ssw0rd123!' -var 'wo_password_version=2' 2>&1) || true
+    wo_hash_after=$(run_sql "$wo_hash_query" 2>/dev/null | grep -o '0x[0-9A-Fa-f]*' | head -1)
+
+    if [[ -n "$wo_hash_before" && -n "$wo_hash_after" && "$wo_hash_before" != "$wo_hash_after" ]]; then
+        record_test "Write-Only Password: password_wo_version bump rotates password" "PASS"
+    else
+        log_error "Expected the password hash of wo_password_login to change (before='$wo_hash_before', after='$wo_hash_after')"
+        record_test "Write-Only Password: password_wo_version bump rotates password" "FAIL"
     fi
 
     return 0

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -22,6 +23,7 @@ import (
 
 var _ resource.Resource = &SQLLoginResource{}
 var _ resource.ResourceWithImportState = &SQLLoginResource{}
+var _ resource.ResourceWithValidateConfig = &SQLLoginResource{}
 
 func NewSQLLoginResource() resource.Resource {
 	return &SQLLoginResource{}
@@ -35,12 +37,82 @@ type SQLLoginResourceModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	Password               types.String `tfsdk:"password"`
+	PasswordWO             types.String `tfsdk:"password_wo"`
+	PasswordWOVersion      types.String `tfsdk:"password_wo_version"`
 	SID                    types.String `tfsdk:"sid"`
 	DefaultDatabase        types.String `tfsdk:"default_database"`
 	DefaultLanguage        types.String `tfsdk:"default_language"`
 	CheckExpirationEnabled types.Bool   `tfsdk:"check_expiration_enabled"`
 	CheckPolicyEnabled     types.Bool   `tfsdk:"check_policy_enabled"`
 	IsDisabled             types.Bool   `tfsdk:"is_disabled"`
+}
+
+// validateLoginPassword checks that exactly one of the two password attributes
+// is configured. Unknown counts as configured: an ephemeral value assigned to
+// password_wo is unknown until apply.
+func validateLoginPassword(data SQLLoginResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	passwordSet := !data.Password.IsNull()
+	writeOnlySet := !data.PasswordWO.IsNull()
+
+	switch {
+	case passwordSet && writeOnlySet:
+		diags.AddAttributeError(
+			path.Root("password_wo"),
+			"Conflicting password attributes",
+			"Only one of `password` and `password_wo` can be set.",
+		)
+	case !passwordSet && !writeOnlySet:
+		diags.AddAttributeError(
+			path.Root("password"),
+			"Missing password",
+			"One of `password` or `password_wo` must be set. Use `password_wo` to keep the "+
+				"password out of the plan and state files; it requires Terraform 1.11 or later.",
+		)
+	}
+
+	if !writeOnlySet && !data.PasswordWOVersion.IsNull() {
+		diags.AddAttributeError(
+			path.Root("password_wo_version"),
+			"Missing write-only password",
+			"`password_wo_version` only has an effect together with `password_wo`.",
+		)
+	}
+
+	return diags
+}
+
+// loginCreatePassword returns the password for a new login. Write-only values
+// are stripped from the plan, so password_wo has to be read from the config.
+func loginCreatePassword(plan, config SQLLoginResourceModel) string {
+	if !config.PasswordWO.IsNull() {
+		return config.PasswordWO.ValueString()
+	}
+	return plan.Password.ValueString()
+}
+
+// loginUpdatePassword returns the password to write to the server, or nil when
+// the login's password does not need changing.
+func loginUpdatePassword(plan, state, config SQLLoginResourceModel) *string {
+	if !config.PasswordWO.IsNull() {
+		// A write-only value is in neither the plan nor the state, so it cannot
+		// be compared. The signals that the server needs a new password are a
+		// changed password_wo_version and a migration off `password`, whose
+		// value is still in state.
+		if plan.PasswordWOVersion.Equal(state.PasswordWOVersion) && state.Password.IsNull() {
+			return nil
+		}
+		password := config.PasswordWO.ValueString()
+		return &password
+	}
+
+	if plan.Password.Equal(state.Password) || plan.Password.IsNull() || plan.Password.ValueString() == "" {
+		return nil
+	}
+
+	password := plan.Password.ValueString()
+	return &password
 }
 
 type sidPlanModifier struct{}
@@ -89,9 +161,26 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 				},
 			},
 			"password": schema.StringAttribute{
-				Description: "The password for the login.",
-				Required:    true,
-				Sensitive:   true,
+				Description: "The password for the login. Persisted in the plan and state files; " +
+					"use `password_wo` instead to avoid that. Exactly one of `password` and `password_wo` must be set.",
+				Optional:  true,
+				Sensitive: true,
+			},
+			"password_wo": schema.StringAttribute{
+				Description: "The password for the login, as a write-only attribute. Accepts ephemeral values, " +
+					"such as those from `ephemeral.random_password`, and is written to neither the plan nor the " +
+					"state file. Requires Terraform 1.11 or later. Exactly one of `password` and `password_wo` " +
+					"must be set. Because Terraform has no stored value to compare against, changing this alone " +
+					"does not update the login; change `password_wo_version` to apply a new password.",
+				Optional:  true,
+				Sensitive: true,
+				WriteOnly: true,
+			},
+			"password_wo_version": schema.StringAttribute{
+				Description: "An arbitrary token whose change triggers an `ALTER LOGIN` with the current " +
+					"`password_wo` value. Only valid together with `password_wo`. Without it, a rotated " +
+					"`password_wo` is never applied.",
+				Optional: true,
 			},
 			"sid": schema.StringAttribute{
 				Description: "The SID (Security Identifier) of the SQL login in hexadecimal format (e.g., 0x0105...). Changing this forces a new resource to be created.",
@@ -153,9 +242,21 @@ func (r *SQLLoginResource) Configure(ctx context.Context, req resource.Configure
 	r.client = client
 }
 
-func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *SQLLoginResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var data SQLLoginResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(validateLoginPassword(data)...)
+}
+
+func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var data, config SQLLoginResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -167,7 +268,7 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 
 	opts := mssql.CreateSQLLoginOptions{
 		Name:                   data.Name.ValueString(),
-		Password:               data.Password.ValueString(),
+		Password:               loginCreatePassword(data, config),
 		SID:                    data.SID.ValueString(),
 		DefaultDatabase:        data.DefaultDatabase.ValueString(),
 		DefaultLanguage:        data.DefaultLanguage.ValueString(),
@@ -252,9 +353,11 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data SQLLoginResourceModel
 	var state SQLLoginResourceModel
+	var config SQLLoginResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -269,10 +372,7 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 
 	// Check what changed - only update if values actually differ
-	if !data.Password.Equal(state.Password) && !data.Password.IsNull() && data.Password.ValueString() != "" {
-		password := data.Password.ValueString()
-		opts.Password = &password
-	}
+	opts.Password = loginUpdatePassword(data, state, config)
 	if !data.DefaultDatabase.Equal(state.DefaultDatabase) {
 		db := data.DefaultDatabase.ValueString()
 		opts.DefaultDatabase = &db
