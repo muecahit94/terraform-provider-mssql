@@ -82,6 +82,24 @@ run_sql() {
     fi
 }
 
+run_sql_as_user() {
+    local username="$1"
+    local password="$2"
+    local query="$3"
+    local database="${4:-master}"
+    
+    if command -v sqlcmd &> /dev/null; then
+        SQLCMDPASSWORD="$password" sqlcmd -S localhost -U "$username" -d "$database" -Q "$query" -C 2>/dev/null
+    elif command -v mssql &> /dev/null; then
+        mssql -u "$username" -p "$password" -d "$database" -q "$query" 2>/dev/null
+    elif command -v mssql-cli &> /dev/null; then
+        mssql-cli -S localhost -U "$username" -P "$password" -d "$database" -Q "$query" 2>/dev/null
+    else
+        echo "Error: No SQL CLI tool found (sqlcmd, mssql, or mssql-cli)" >&2
+        return 1
+    fi
+}
+
 wait_for_sql() {
     log_info "Waiting for SQL Server to be ready (this may take up to 60 seconds)..."
     local max_attempts=60
@@ -311,6 +329,30 @@ EOF
         record_test "SQL Verify: Login with custom SID exists and matches" "FAIL"
     fi
 
+    # Check login created from a write-only password
+    if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'wo_password_login'" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: Login with write-only password exists" "PASS"
+    else
+        log_error "Expected wo_password_login to exist"
+        record_test "SQL Verify: Login with write-only password exists" "FAIL"
+    fi
+
+    # Verify authentication succeeds with the initial write-only password
+    if run_sql_as_user "wo_password_login" "WriteOnlyP@ssw0rd123!" "SELECT 1" | grep -v "Executed in" | grep "1" -q; then
+        record_test "Write-Only Password: authentication with initial password succeeds" "PASS"
+    else
+        log_error "Expected authentication for wo_password_login with initial password to succeed"
+        record_test "Write-Only Password: authentication with initial password succeeds" "FAIL"
+    fi
+
+    # The whole point of password_wo: the value must not reach the state file
+    if grep -F -q 'WriteOnlyP@ssw0rd123!' terraform.tfstate; then
+        log_error "Expected the write-only password to be absent from terraform.tfstate"
+        record_test "Write-Only Password: absent from state" "FAIL"
+    else
+        record_test "Write-Only Password: absent from state" "PASS"
+    fi
+
     # Check idempotency
     log_info "Checking idempotency..."
     local plan_output
@@ -320,6 +362,44 @@ EOF
     else
         record_test "Complete Example: Idempotency" "FAIL"
     fi
+
+    # Verify changing write-only password without bumping version produces no diff
+    log_info "Checking that unversioned password_wo change is ignored..."
+    local unversioned_plan
+    unversioned_plan=$(terraform plan -var 'wo_password=IgnoredP@ssw0rd123!' -detailed-exitcode 2>&1) || true
+    if echo "$unversioned_plan" | grep -q "No changes"; then
+        record_test "Write-Only Password: unversioned password change is ignored" "PASS"
+    else
+        record_test "Write-Only Password: unversioned password change is ignored" "FAIL"
+    fi
+
+    # Terraform cannot diff a write-only value, so only a password_wo_version
+    # change may rotate the password on the server.
+    log_info "Checking write-only password rotation..."
+    local wo_hash_query="SELECT CONVERT(varchar(max), password_hash, 1) FROM sys.sql_logins WHERE name = 'wo_password_login'"
+    local wo_hash_before wo_hash_after
+    wo_hash_before=$(run_sql "$wo_hash_query" 2>/dev/null | grep -o '0x[0-9A-Fa-f]*' | head -1)
+
+    apply_output=$(terraform apply -auto-approve -var 'wo_password=RotatedP@ssw0rd123!' -var 'wo_password_version=2' 2>&1) || true
+    wo_hash_after=$(run_sql "$wo_hash_query" 2>/dev/null | grep -o '0x[0-9A-Fa-f]*' | head -1)
+
+    if [[ -n "$wo_hash_before" && -n "$wo_hash_after" && "$wo_hash_before" != "$wo_hash_after" ]]; then
+        record_test "Write-Only Password: password_wo_version bump rotates password" "PASS"
+    else
+        log_error "Expected the password hash of wo_password_login to change (before='$wo_hash_before', after='$wo_hash_after')"
+        record_test "Write-Only Password: password_wo_version bump rotates password" "FAIL"
+    fi
+
+    # Verify authentication succeeds with the rotated password
+    if run_sql_as_user "wo_password_login" "RotatedP@ssw0rd123!" "SELECT 1" | grep -v "Executed in" | grep "1" -q; then
+        record_test "Write-Only Password: authentication with rotated password succeeds" "PASS"
+    else
+        log_error "Expected authentication for wo_password_login with rotated password to succeed"
+        record_test "Write-Only Password: authentication with rotated password succeeds" "FAIL"
+    fi
+
+    # Revert rotation to keep state aligned with default variables for subsequent phases
+    terraform apply -auto-approve >/dev/null 2>&1 || true
 
     return 0
 }

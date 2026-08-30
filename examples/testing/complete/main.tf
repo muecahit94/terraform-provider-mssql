@@ -1,4 +1,7 @@
 terraform {
+  # 1.11 for the write-only password_wo attribute on mssql_sql_login
+  required_version = ">= 1.11"
+
   required_providers {
     mssql = {
       source  = "muecahit94/mssql"
@@ -151,7 +154,7 @@ resource "mssql_script" "create_message_type" {
   read_script   = "SELECT 1 FROM sys.service_message_types WHERE name = 'MyCustomMessage'"
   delete_script = "DROP MESSAGE TYPE [MyCustomMessage];"
 
-  depends_on = [mssql_script.enable_service_broker]   
+  depends_on = [mssql_script.enable_service_broker]
 }
 
 # =============================================================================
@@ -167,4 +170,21 @@ resource "mssql_sql_login" "sid_login" {
 data "mssql_sql_login" "sid_login" {
   name       = mssql_sql_login.sid_login.name
   depends_on = [mssql_sql_login.sid_login]
+}
+
+# =============================================================================
+# SQL Login with a write-only password
+#
+# password_wo is never written to the plan or the state file. It accepts
+# ephemeral values, e.g. ephemeral.random_password.x.result; a variable is used
+# here to keep this example free of additional providers.
+#
+# Terraform cannot compare a write-only value against state, so a rotation only
+# reaches the server when password_wo_version changes too.
+# =============================================================================
+
+resource "mssql_sql_login" "wo_login" {
+  name                = "wo_password_login"
+  password_wo         = var.wo_password
+  password_wo_version = var.wo_password_version
 }

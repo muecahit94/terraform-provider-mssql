@@ -7,11 +7,12 @@ A Terraform provider to manage Microsoft SQL Server and Azure SQL resources.
 - **Full SQL Server Support**: Manage databases, logins, users, roles, schemas, and permissions
 - **Azure SQL Compatible**: Works with Azure SQL Database and Managed Instance
 - **Azure AD Authentication**: Support for service principals and managed identities
+- **Write-Only Passwords**: `mssql_sql_login` takes ephemeral passwords that reach neither the plan nor the state file
 - **Resilient Design**: Gracefully handles ID changes and manual modifications
 
 ## Requirements
 
-- [Terraform](https://www.terraform.io/downloads.html) >= 1.0
+- [Terraform](https://www.terraform.io/downloads.html) >= 1.0 (>= 1.11 for [write-only attributes](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only))
 - Go >= 1.21 (for building from source)
 - SQL Server 2016+ or Azure SQL
 
