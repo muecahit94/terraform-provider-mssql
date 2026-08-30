@@ -202,6 +202,9 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 				Description: "The default language for the login.",
 				Optional:    true,
 				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"check_expiration_enabled": schema.BoolAttribute{
 				Description: "Whether password expiration is checked.",
@@ -398,6 +401,12 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 	// Skip update if nothing changed
 	if opts.Password == nil && opts.DefaultDatabase == nil && opts.DefaultLanguage == nil &&
 		opts.CheckExpirationEnabled == nil && opts.CheckPolicyEnabled == nil && opts.IsDisabled == nil {
+		if data.DefaultLanguage.IsUnknown() {
+			data.DefaultLanguage = state.DefaultLanguage
+		}
+		if data.SID.IsUnknown() {
+			data.SID = state.SID
+		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
