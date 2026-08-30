@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.4.0...v1.5.0) (2026-08-30)
+
+
+### Features
+
+* **mssql_sql_login:** support ephemeral passwords via write-only password_wo ([0382900](https://github.com/muecahit94/terraform-provider-mssql/commit/03829000227c292c44e9de51219cfaa64949cd10))
+* **mssql_sql_login:** support ephemeral passwords via write-only password_wo ([d8cca03](https://github.com/muecahit94/terraform-provider-mssql/commit/d8cca036ab1c4641f33b62bf365964896b93b6d5))
+
+
+### Bug Fixes
+
+* ensure write-only login state preservation and add E2E verification for password rotation behavior ([6acd7c6](https://github.com/muecahit94/terraform-provider-mssql/commit/6acd7c6833e0a26bb569b03c9457b888f232ee49))
+
 ## [1.4.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.3.4...v1.4.0) (2026-08-19)
 
 
