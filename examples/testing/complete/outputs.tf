@@ -17,3 +17,8 @@ output "sid_login_sid" {
   description = "The SID of the custom SID login"
   value       = data.mssql_sql_login.sid_login.sid
 }
+
+output "server_override_login_sid" {
+  description = "The SID of the server-override login"
+  value       = data.mssql_sql_login.server_override.sid
+}

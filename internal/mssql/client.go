@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -18,12 +19,39 @@ import (
 	mssqldb "github.com/microsoft/go-mssqldb"
 )
 
+// ClientPool caches database connections to avoid reconnecting on every resource operation.
+type ClientPool struct {
+	mu      sync.Mutex
+	clients map[string]*Client
+}
+
+// NewClientPool creates a new empty client pool.
+func NewClientPool() *ClientPool {
+	return &ClientPool{
+		clients: make(map[string]*Client),
+	}
+}
+
+func (p *ClientPool) Get(key string) (*Client, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c, ok := p.clients[key]
+	return c, ok
+}
+
+func (p *ClientPool) Set(key string, c *Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clients[key] = c
+}
+
 // Client represents a connection to a SQL Server instance.
 type Client struct {
 	db       *sql.DB
 	hostname string
 	port     int
 	config   *Config // Store config for creating database-specific connections
+	pool     *ClientPool
 }
 
 // Config holds the configuration for connecting to SQL Server.
@@ -94,7 +122,15 @@ func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
 		hostname: cfg.Hostname,
 		port:     cfg.Port,
 		config:   cfg,
+		pool:     NewClientPool(),
 	}, nil
+}
+
+// NewMultiServerClient creates a client without a default server connection, for use in multi-server setups.
+func NewMultiServerClient() *Client {
+	return &Client{
+		pool: NewClientPool(),
+	}
 }
 
 // connectWithSQLAuth establishes a connection using SQL authentication.
@@ -281,12 +317,68 @@ func (c *Client) GetDatabaseConnection(ctx context.Context, databaseName string)
 	return db, nil
 }
 
-// Close closes the database connection.
-func (c *Client) Close() error {
-	if c.db != nil {
-		return c.db.Close()
+// CacheKey generates a cache key for the given configuration.
+func CacheKey(cfg *Config) string {
+	var authKey string
+	if cfg.SQLAuth != nil {
+		authKey = fmt.Sprintf("sql:%s:%s", cfg.SQLAuth.Username, cfg.SQLAuth.Password)
+	} else if cfg.AzureAuth != nil {
+		authKey = fmt.Sprintf("az:%s:%s:%s", cfg.AzureAuth.TenantID, cfg.AzureAuth.ClientID, cfg.AzureAuth.ClientSecret)
 	}
-	return nil
+	return fmt.Sprintf("%s:%d:%s", cfg.Hostname, cfg.Port, authKey)
+}
+
+// GetClientForServer retrieves an existing client for the specified server configuration from the pool,
+// or creates and caches a new one.
+func (c *Client) GetClientForServer(ctx context.Context, cfg *Config) (*Client, error) {
+	if c.pool == nil {
+		c.pool = NewClientPool()
+	}
+
+	key := CacheKey(cfg)
+	if existing, ok := c.pool.Get(key); ok {
+		return existing, nil
+	}
+
+	c.pool.mu.Lock()
+	defer c.pool.mu.Unlock()
+
+	// Double check after lock
+	if existing, ok := c.pool.clients[key]; ok {
+		return existing, nil
+	}
+
+	client, err := NewClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	client.pool = c.pool
+
+	c.pool.clients[key] = client
+	return client, nil
+}
+
+// Close closes the database connection and any pooled client connections.
+func (c *Client) Close() error {
+	var firstErr error
+	if c.db != nil {
+		if err := c.db.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if c.pool != nil {
+		c.pool.mu.Lock()
+		defer c.pool.mu.Unlock()
+		for _, client := range c.pool.clients {
+			if client.db != nil && client.db != c.db {
+				if err := client.db.Close(); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		c.pool.clients = make(map[string]*Client)
+	}
+	return firstErr
 }
 
 // DB returns the underlying database connection for advanced queries.

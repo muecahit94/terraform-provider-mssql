@@ -13,6 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -33,9 +35,20 @@ type SQLLoginResource struct {
 	client *mssql.Client
 }
 
+// ServerModel describes the server connection configuration when overridden on the resource.
+type ServerModel struct {
+	Hostname  types.String    `tfsdk:"hostname"`
+	Host      types.String    `tfsdk:"host"`
+	Port      types.Int64     `tfsdk:"port"`
+	SQLAuth   *SQLAuthModel   `tfsdk:"sql_auth"`
+	Login     *SQLAuthModel   `tfsdk:"login"`
+	AzureAuth *AzureAuthModel `tfsdk:"azure_auth"`
+}
+
 type SQLLoginResourceModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
+	LoginName              types.String `tfsdk:"login_name"`
 	Password               types.String `tfsdk:"password"`
 	PasswordWO             types.String `tfsdk:"password_wo"`
 	PasswordWOVersion      types.String `tfsdk:"password_wo_version"`
@@ -45,6 +58,7 @@ type SQLLoginResourceModel struct {
 	CheckExpirationEnabled types.Bool   `tfsdk:"check_expiration_enabled"`
 	CheckPolicyEnabled     types.Bool   `tfsdk:"check_policy_enabled"`
 	IsDisabled             types.Bool   `tfsdk:"is_disabled"`
+	Server                 *ServerModel `tfsdk:"server"`
 }
 
 // validateLoginPassword checks that exactly one of the two password attributes
@@ -81,6 +95,202 @@ func validateLoginPassword(data SQLLoginResourceModel) diag.Diagnostics {
 	}
 
 	return diags
+}
+
+// getLoginName resolves the login name from either 'name' or 'login_name'.
+func getLoginName(data SQLLoginResourceModel) string {
+	if !data.Name.IsNull() && data.Name.ValueString() != "" {
+		return data.Name.ValueString()
+	}
+	if !data.LoginName.IsNull() && data.LoginName.ValueString() != "" {
+		return data.LoginName.ValueString()
+	}
+	return ""
+}
+
+// validateLoginName ensures exactly one of 'name' or 'login_name' is configured.
+func validateLoginName(data SQLLoginResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	hasName := !data.Name.IsNull() && !data.Name.IsUnknown() && data.Name.ValueString() != ""
+	hasLoginName := !data.LoginName.IsNull() && !data.LoginName.IsUnknown() && data.LoginName.ValueString() != ""
+
+	if hasName && hasLoginName && data.Name.ValueString() != data.LoginName.ValueString() {
+		diags.AddAttributeError(
+			path.Root("login_name"),
+			"Conflicting login name attributes",
+			"Only one of `name` and `login_name` can be set.",
+		)
+	} else if !hasName && !hasLoginName {
+		if data.Name.IsNull() && data.LoginName.IsNull() {
+			diags.AddAttributeError(
+				path.Root("name"),
+				"Missing login name",
+				"One of `name` or `login_name` must be set.",
+			)
+		}
+	}
+
+	return diags
+}
+
+// validateServerConfig ensures valid server override attributes.
+func validateServerConfig(server *ServerModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if server == nil {
+		return diags
+	}
+
+	hasHostname := !server.Hostname.IsNull() && !server.Hostname.IsUnknown() && server.Hostname.ValueString() != ""
+	hasHost := !server.Host.IsNull() && !server.Host.IsUnknown() && server.Host.ValueString() != ""
+
+	if hasHostname && hasHost && server.Hostname.ValueString() != server.Host.ValueString() {
+		diags.AddAttributeError(
+			path.Root("server").AtName("host"),
+			"Conflicting hostname attributes",
+			"Both 'hostname' and 'host' are specified with different values.",
+		)
+	}
+
+	if !hasHostname && !hasHost && !server.Hostname.IsUnknown() && !server.Host.IsUnknown() {
+		diags.AddAttributeError(
+			path.Root("server").AtName("hostname"),
+			"Missing server hostname",
+			"Either 'hostname' or 'host' must be specified in the 'server' block.",
+		)
+	}
+
+	hasSQLAuth := server.SQLAuth != nil
+	hasLogin := server.Login != nil
+	hasAzureAuth := server.AzureAuth != nil
+
+	if hasSQLAuth && hasLogin {
+		diags.AddAttributeError(
+			path.Root("server").AtName("login"),
+			"Conflicting authentication blocks",
+			"Only one of 'sql_auth' and 'login' can be specified.",
+		)
+	}
+
+	if (hasSQLAuth || hasLogin) && hasAzureAuth {
+		diags.AddAttributeError(
+			path.Root("server").AtName("azure_auth"),
+			"Conflicting authentication methods",
+			"Only one of 'sql_auth' (or 'login') and 'azure_auth' can be configured.",
+		)
+	}
+
+	if !hasSQLAuth && !hasLogin && !hasAzureAuth {
+		diags.AddAttributeError(
+			path.Root("server"),
+			"Missing authentication configuration",
+			"Either 'sql_auth', 'login', or 'azure_auth' must be configured in the 'server' block.",
+		)
+	}
+
+	return diags
+}
+
+// serverToConfig converts a ServerModel to mssql.Config.
+func serverToConfig(server *ServerModel) (*mssql.Config, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if server == nil {
+		return nil, diags
+	}
+
+	var hostname string
+	if !server.Hostname.IsNull() && server.Hostname.ValueString() != "" {
+		hostname = server.Hostname.ValueString()
+	} else if !server.Host.IsNull() && server.Host.ValueString() != "" {
+		hostname = server.Host.ValueString()
+	}
+
+	if hostname == "" {
+		diags.AddAttributeError(
+			path.Root("server").AtName("hostname"),
+			"Missing server hostname",
+			"Either 'hostname' or 'host' must be specified in the 'server' block.",
+		)
+		return nil, diags
+	}
+
+	port := 1433
+	if !server.Port.IsNull() && server.Port.ValueInt64() > 0 {
+		port = int(server.Port.ValueInt64())
+	}
+
+	auth := server.SQLAuth
+	if auth == nil {
+		auth = server.Login
+	}
+
+	cfg := &mssql.Config{
+		Hostname: hostname,
+		Port:     port,
+	}
+
+	if auth != nil {
+		cfg.SQLAuth = &mssql.SQLAuthConfig{
+			Username: auth.Username.ValueString(),
+			Password: auth.Password.ValueString(),
+		}
+	} else if server.AzureAuth != nil {
+		cfg.AzureAuth = &mssql.AzureAuthConfig{
+			ClientID:     server.AzureAuth.ClientID.ValueString(),
+			ClientSecret: server.AzureAuth.ClientSecret.ValueString(),
+			TenantID:     server.AzureAuth.TenantID.ValueString(),
+		}
+	} else {
+		diags.AddAttributeError(
+			path.Root("server"),
+			"Missing authentication configuration",
+			"Either 'sql_auth', 'login', or 'azure_auth' must be configured in the 'server' block.",
+		)
+		return nil, diags
+	}
+
+	return cfg, diags
+}
+
+// getClient returns the client to use: either from the resource server block or provider default.
+func (r *SQLLoginResource) getClient(ctx context.Context, server *ServerModel) (*mssql.Client, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	if server != nil && (!server.Hostname.IsNull() || !server.Host.IsNull()) {
+		cfg, d := serverToConfig(server)
+		diags.Append(d...)
+		if diags.HasError() {
+			return nil, diags
+		}
+
+		if r.client == nil {
+			diags.AddError(
+				"MSSQL Provider Not Configured",
+				"The MSSQL provider has not been initialized.",
+			)
+			return nil, diags
+		}
+
+		client, err := r.client.GetClientForServer(ctx, cfg)
+		if err != nil {
+			diags.AddError(
+				"Failed to Connect to SQL Server",
+				fmt.Sprintf("Failed to establish connection to server %s:%d: %s", cfg.Hostname, cfg.Port, err.Error()),
+			)
+			return nil, diags
+		}
+		return client, diags
+	}
+
+	// Fall back to provider default client
+	if r.client == nil || r.client.DB() == nil {
+		diags.AddError(
+			"Default MSSQL Connection Not Configured",
+			"No connection configuration was found. You must either configure connection settings in the provider block (hostname, auth) or provide a 'server' block on the resource.",
+		)
+		return nil, diags
+	}
+
+	return r.client, diags
 }
 
 // loginCreatePassword returns the password for a new login. Write-only values
@@ -155,7 +365,16 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 			},
 			"name": schema.StringAttribute{
 				Description: "The name of the login.",
-				Required:    true,
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"login_name": schema.StringAttribute{
+				Description: "Alias for `name`. The name of the login.",
+				Optional:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -225,6 +444,84 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 				Default:     booldefault.StaticBool(false),
 			},
 		},
+		Blocks: map[string]schema.Block{
+			"server": schema.SingleNestedBlock{
+				Description: "SQL Server instance configuration. If omitted, the default provider connection settings are used.",
+				Attributes: map[string]schema.Attribute{
+					"hostname": schema.StringAttribute{
+						Description: "FQDN or IP address of the SQL endpoint.",
+						Optional:    true,
+						PlanModifiers: []planmodifier.String{
+							stringplanmodifier.RequiresReplace(),
+						},
+					},
+					"host": schema.StringAttribute{
+						Description: "Alias for `hostname`. FQDN or IP address of the SQL endpoint.",
+						Optional:    true,
+						PlanModifiers: []planmodifier.String{
+							stringplanmodifier.RequiresReplace(),
+						},
+					},
+					"port": schema.Int64Attribute{
+						Description: "TCP port of SQL endpoint. Defaults to 1433.",
+						Optional:    true,
+						Computed:    true,
+						Default:     int64default.StaticInt64(1433),
+						PlanModifiers: []planmodifier.Int64{
+							int64planmodifier.RequiresReplace(),
+						},
+					},
+				},
+				Blocks: map[string]schema.Block{
+					"sql_auth": schema.SingleNestedBlock{
+						Description: "SQL authentication credentials. Either sql_auth, login, or azure_auth must be provided.",
+						Attributes: map[string]schema.Attribute{
+							"username": schema.StringAttribute{
+								Description: "Username for SQL authentication.",
+								Optional:    true,
+							},
+							"password": schema.StringAttribute{
+								Description: "Password for SQL authentication.",
+								Optional:    true,
+								Sensitive:   true,
+							},
+						},
+					},
+					"login": schema.SingleNestedBlock{
+						Description: "Alias for `sql_auth`. SQL authentication credentials.",
+						Attributes: map[string]schema.Attribute{
+							"username": schema.StringAttribute{
+								Description: "Username for SQL authentication.",
+								Optional:    true,
+							},
+							"password": schema.StringAttribute{
+								Description: "Password for SQL authentication.",
+								Optional:    true,
+								Sensitive:   true,
+							},
+						},
+					},
+					"azure_auth": schema.SingleNestedBlock{
+						Description: "Azure AD authentication configuration.",
+						Attributes: map[string]schema.Attribute{
+							"client_id": schema.StringAttribute{
+								Description: "Service Principal client (application) ID.",
+								Optional:    true,
+							},
+							"client_secret": schema.StringAttribute{
+								Description: "Service Principal secret.",
+								Optional:    true,
+								Sensitive:   true,
+							},
+							"tenant_id": schema.StringAttribute{
+								Description: "Azure AD tenant ID.",
+								Optional:    true,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -254,6 +551,8 @@ func (r *SQLLoginResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 
 	resp.Diagnostics.Append(validateLoginPassword(data)...)
+	resp.Diagnostics.Append(validateLoginName(data)...)
+	resp.Diagnostics.Append(validateServerConfig(data.Server)...)
 }
 
 func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -265,12 +564,20 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	client, d := r.getClient(ctx, data.Server)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	loginName := getLoginName(data)
+
 	tflog.Debug(ctx, "Creating SQL login", map[string]interface{}{
-		"name": data.Name.ValueString(),
+		"name": loginName,
 	})
 
 	opts := mssql.CreateSQLLoginOptions{
-		Name:                   data.Name.ValueString(),
+		Name:                   loginName,
 		Password:               loginCreatePassword(data, config),
 		SID:                    data.SID.ValueString(),
 		DefaultDatabase:        data.DefaultDatabase.ValueString(),
@@ -279,7 +586,7 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 		CheckPolicyEnabled:     data.CheckPolicyEnabled.ValueBool(),
 	}
 
-	login, err := r.client.CreateSQLLogin(ctx, opts)
+	login, err := client.CreateSQLLogin(ctx, opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create SQL login", err.Error())
 		return
@@ -288,8 +595,8 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 	// Handle disabled state
 	if data.IsDisabled.ValueBool() {
 		disabled := true
-		_, err := r.client.UpdateSQLLogin(ctx, mssql.UpdateSQLLoginOptions{
-			Name:       data.Name.ValueString(),
+		_, err := client.UpdateSQLLogin(ctx, mssql.UpdateSQLLoginOptions{
+			Name:       loginName,
 			IsDisabled: &disabled,
 		})
 		if err != nil {
@@ -299,6 +606,10 @@ func (r *SQLLoginResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
+	data.Name = types.StringValue(login.Name)
+	if !data.LoginName.IsNull() {
+		data.LoginName = types.StringValue(login.Name)
+	}
 	data.SID = types.StringValue(login.SID)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 
@@ -313,13 +624,21 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
+	client, d := r.getClient(ctx, data.Server)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	loginName := getLoginName(data)
+
 	var login *mssql.SQLLogin
 	var err error
 
 	// Try to find by ID first
 	id, parseErr := strconv.Atoi(data.ID.ValueString())
 	if parseErr == nil {
-		login, err = r.client.GetSQLLoginByID(ctx, id)
+		login, err = client.GetSQLLoginByID(ctx, id)
 		if err != nil {
 			resp.Diagnostics.AddError("Failed to read SQL login", err.Error())
 			return
@@ -327,8 +646,8 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 	}
 
 	// If not found by ID, try to find by name (handles ID changes)
-	if login == nil && !data.Name.IsNull() {
-		login, err = r.client.GetSQLLogin(ctx, data.Name.ValueString())
+	if login == nil && loginName != "" {
+		login, err = client.GetSQLLogin(ctx, loginName)
 		if err != nil {
 			resp.Diagnostics.AddError("Failed to read SQL login", err.Error())
 			return
@@ -343,6 +662,9 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 	// Update state with current values
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
 	data.Name = types.StringValue(login.Name)
+	if !data.LoginName.IsNull() {
+		data.LoginName = types.StringValue(login.Name)
+	}
 	data.SID = types.StringValue(login.SID)
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabaseName)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
@@ -366,12 +688,20 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
+	client, d := r.getClient(ctx, data.Server)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	loginName := getLoginName(data)
+
 	tflog.Debug(ctx, "Updating SQL login", map[string]interface{}{
-		"name": data.Name.ValueString(),
+		"name": loginName,
 	})
 
 	opts := mssql.UpdateSQLLoginOptions{
-		Name: data.Name.ValueString(),
+		Name: loginName,
 	}
 
 	// Check what changed - only update if values actually differ
@@ -407,17 +737,25 @@ func (r *SQLLoginResource) Update(ctx context.Context, req resource.UpdateReques
 		if data.SID.IsUnknown() {
 			data.SID = state.SID
 		}
+		data.Name = types.StringValue(loginName)
+		if !data.LoginName.IsNull() {
+			data.LoginName = types.StringValue(loginName)
+		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
 
-	login, err := r.client.UpdateSQLLogin(ctx, opts)
+	login, err := client.UpdateSQLLogin(ctx, opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update SQL login", err.Error())
 		return
 	}
 
 	// Update state with actual values from the server to resolve "known after apply" values
+	data.Name = types.StringValue(login.Name)
+	if !data.LoginName.IsNull() {
+		data.LoginName = types.StringValue(login.Name)
+	}
 	data.SID = types.StringValue(login.SID)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 
@@ -432,11 +770,19 @@ func (r *SQLLoginResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
+	client, d := r.getClient(ctx, data.Server)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	loginName := getLoginName(data)
+
 	tflog.Debug(ctx, "Deleting SQL login", map[string]interface{}{
-		"name": data.Name.ValueString(),
+		"name": loginName,
 	})
 
-	err := r.client.DropSQLLogin(ctx, data.Name.ValueString())
+	err := client.DropSQLLogin(ctx, loginName)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to delete SQL login", err.Error())
 		return
@@ -444,7 +790,13 @@ func (r *SQLLoginResource) Delete(ctx context.Context, req resource.DeleteReques
 }
 
 func (r *SQLLoginResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	login, err := r.client.GetSQLLogin(ctx, req.ID)
+	client, d := r.getClient(ctx, nil)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	login, err := client.GetSQLLogin(ctx, req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to import SQL login", err.Error())
 		return
