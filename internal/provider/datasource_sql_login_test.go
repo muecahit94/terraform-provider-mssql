@@ -120,4 +120,3 @@ func TestValidateDataSourceLoginName(t *testing.T) {
 		})
 	}
 }
-
