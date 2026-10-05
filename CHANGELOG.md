@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.5.0...v1.6.0) (2026-10-05)
+
+
+### Features
+
+* **login:** 29 - add per-resource server override and multi-server s… ([c62c155](https://github.com/muecahit94/terraform-provider-mssql/commit/c62c15504c6ae048b28dd530ef755eb5e0e4dcb8))
+* **login:** 29 - add per-resource server override and multi-server support to sql login resource and provider ([0128426](https://github.com/muecahit94/terraform-provider-mssql/commit/0128426de36b99f2851746085d2260d92ca95ffc))
+
+
+### Miscellaneous
+
+* update Go dependencies and cleanup test whitespace ([4b78638](https://github.com/muecahit94/terraform-provider-mssql/commit/4b78638301f1b30b5d439eb2342f2d33470e1188))
+
 ## [1.5.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.4.0...v1.5.0) (2026-08-30)
 
 
