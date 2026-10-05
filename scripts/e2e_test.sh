@@ -4,6 +4,8 @@
 # Requires: bash 4.0+, docker, terraform, mssql-cli/sqlcmd, go
 
 set -e
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export GIT_CONFIG_GLOBAL=/dev/null
 
 # Colors for output
 RED='\033[0;31m'
@@ -169,7 +171,7 @@ phase_setup() {
 
     # Build provider
     log_info "Building Terraform provider..."
-    if go build -o terraform-provider-mssql . 2>&1; then
+    if go build -buildvcs=false -o terraform-provider-mssql . 2>&1; then
         record_test "Provider Build" "PASS"
     else
         record_test "Provider Build" "FAIL"
@@ -329,6 +331,30 @@ EOF
         record_test "SQL Verify: Login with custom SID exists and matches" "FAIL"
     fi
 
+    # Check server override login with custom SID
+    if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'server_override_login' AND sid = 0xFEEDFACE1234567890ABCDEF12345678" | grep -v "Executed in" | grep "1" -q; then
+        record_test "SQL Verify: Login with server override and custom SID exists" "PASS"
+    else
+        log_error "Expected server_override_login to exist with SID 0xFEEDFACE1234567890ABCDEF12345678"
+        record_test "SQL Verify: Login with server override and custom SID exists" "FAIL"
+    fi
+
+    # Verify authentication succeeds with the server override login
+    if run_sql_as_user "server_override_login" "AppP@ssw0rd123!" "SELECT 1" | grep -v "Executed in" | grep "1" -q; then
+        record_test "Server Override: authentication succeeds" "PASS"
+    else
+        log_error "Expected authentication for server_override_login to succeed"
+        record_test "Server Override: authentication succeeds" "FAIL"
+    fi
+
+    # Verify data source output for server override login
+    if terraform output -raw server_override_login_sid 2>/dev/null | grep -q "0xFEEDFACE1234567890ABCDEF12345678"; then
+        record_test "Server Override: Data source output SID matches" "PASS"
+    else
+        log_error "Expected data source to output matching SID for server_override_login"
+        record_test "Server Override: Data source output SID matches" "FAIL"
+    fi
+
     # Check login created from a write-only password
     if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'wo_password_login'" | grep -v "Executed in" | grep "1" -q; then
         record_test "SQL Verify: Login with write-only password exists" "PASS"
@@ -427,7 +453,7 @@ phase_data_sources() {
 
     # Verify outputs work
     log_info "Verifying data source outputs..."
-    if terraform output 2>&1 | grep -q "databases"; then
+    if terraform output 2>&1 | grep -q "databases" && terraform output -raw sa_login_name 2>/dev/null | grep -q "sa"; then
         record_test "Data Sources: Output verification" "PASS"
     else
         record_test "Data Sources: Output verification" "FAIL"
@@ -567,6 +593,23 @@ phase_drift_recovery() {
         fi
     else
         record_test "Drift Recovery: Schema permission restoration" "FAIL"
+    fi
+
+    # Test 6: Server override login drift recovery
+    log_info "Test: Server override login drift recovery..."
+    run_sql "DROP LOGIN server_override_login" >/dev/null 2>&1 || true
+
+    apply_output=$(terraform apply -auto-approve 2>&1)
+    if echo "$apply_output" | grep -q "Apply complete"; then
+        if run_sql "SELECT 1 FROM sys.sql_logins WHERE name = 'server_override_login' AND sid = 0xFEEDFACE1234567890ABCDEF12345678" | grep -v "Executed in" | grep "1" -q; then
+            record_test "Drift Recovery: Server override login recreation" "PASS"
+        else
+            record_test "Drift Recovery: Server override login recreation" "FAIL"
+        fi
+    else
+        echo "Terraform apply failed:"
+        echo "$apply_output"
+        record_test "Drift Recovery: Server override login recreation" "FAIL"
     fi
 
     return 0

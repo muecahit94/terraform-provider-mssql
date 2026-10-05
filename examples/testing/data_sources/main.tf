@@ -36,6 +36,25 @@ data "mssql_sql_logins" "all" {}
 # Get server roles
 data "mssql_server_roles" "all" {}
 
+# Get specific login info using provider default
+data "mssql_sql_login" "sa_default" {
+  name = "sa"
+}
+
+# Get specific login info using server override block and login_name alias
+data "mssql_sql_login" "sa_server_override" {
+  server {
+    host = "localhost"
+    port = 1433
+    login {
+      username = "sa"
+      password = "P@ssw0rd123!"
+    }
+  }
+
+  login_name = "sa"
+}
+
 output "databases" {
   value = [for db in data.mssql_databases.all.databases : db.name]
 }
@@ -51,3 +70,12 @@ output "login_count" {
 output "server_roles" {
   value = [for role in data.mssql_server_roles.all.roles : role.name]
 }
+
+output "sa_login_name" {
+  value = data.mssql_sql_login.sa_server_override.name
+}
+
+output "sa_login_sid" {
+  value = data.mssql_sql_login.sa_server_override.sid
+}
+

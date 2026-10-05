@@ -188,3 +188,36 @@ resource "mssql_sql_login" "wo_login" {
   password_wo         = var.wo_password
   password_wo_version = var.wo_password_version
 }
+
+# =============================================================================
+# SQL Login with per-resource server override and custom SID
+# =============================================================================
+
+resource "mssql_sql_login" "server_override" {
+  server {
+    host = var.sql_hostname
+    port = var.sql_port
+    login {
+      username = var.sql_username
+      password = var.sql_password
+    }
+  }
+
+  login_name = "server_override_login"
+  password   = var.app_password
+  sid        = "0xFEEDFACE1234567890ABCDEF12345678"
+}
+
+data "mssql_sql_login" "server_override" {
+  server {
+    hostname = var.sql_hostname
+    port     = var.sql_port
+    sql_auth {
+      username = var.sql_username
+      password = var.sql_password
+    }
+  }
+
+  name       = mssql_sql_login.server_override.name
+  depends_on = [mssql_sql_login.server_override]
+}

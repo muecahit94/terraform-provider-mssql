@@ -26,3 +26,22 @@ resource "mssql_sql_login" "write_only_password" {
   # to apply a rotated password.
   password_wo_version = "1"
 }
+
+# Multi-host login with per-resource server block and identical SID across hosts
+resource "mssql_sql_login" "multi_server" {
+  for_each = toset(["sql-node-01.corp", "sql-node-02.corp"])
+
+  server {
+    hostname = each.value
+    port     = 1433
+    sql_auth {
+      username = "sa"
+      password = "SAPassword123!"
+    }
+  }
+
+  name     = "replicated_login"
+  password = "SecretPassword123!"
+  sid      = "0x0123456789ABCDEF0123456789ABCDEF"
+}
+

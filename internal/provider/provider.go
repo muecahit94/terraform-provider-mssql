@@ -6,6 +6,7 @@ package provider
 
 import (
 	"context"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -143,21 +144,32 @@ func (p *MSSQLProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	// Create client
-	client, err := mssql.NewClient(ctx, cfg)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create MSSQL Client",
-			"An unexpected error occurred when creating the MSSQL client. "+
-				"If the error is not clear, please contact the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-		return
-	}
+	var client *mssql.Client
+	var err error
 
-	tflog.Info(ctx, "MSSQL provider configured successfully", map[string]interface{}{
-		"hostname": cfg.Hostname,
-		"port":     cfg.Port,
-	})
+	hasHost := cfg.Hostname != "" || os.Getenv("MSSQL_HOSTNAME") != ""
+	hasAuth := cfg.SQLAuth != nil || cfg.AzureAuth != nil || os.Getenv("ARM_CLIENT_ID") != ""
+
+	if !hasHost && !hasAuth {
+		client = mssql.NewMultiServerClient()
+		tflog.Info(ctx, "MSSQL provider configured in multi-server mode (no default server)")
+	} else {
+		client, err = mssql.NewClient(ctx, cfg)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to Create MSSQL Client",
+				"An unexpected error occurred when creating the MSSQL client. "+
+					"If the error is not clear, please contact the provider developers.\n\n"+
+					"Error: "+err.Error(),
+			)
+			return
+		}
+
+		tflog.Info(ctx, "MSSQL provider configured successfully", map[string]interface{}{
+			"hostname": cfg.Hostname,
+			"port":     cfg.Port,
+		})
+	}
 
 	// Make the client available during DataSource and Resource type Configure methods.
 	resp.DataSourceData = client
