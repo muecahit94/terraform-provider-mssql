@@ -25,8 +25,21 @@ type DatabaseDataSource struct {
 }
 
 type DatabaseDataSourceModel struct {
-	ID   types.String `tfsdk:"id"`
-	Name types.String `tfsdk:"name"`
+	ID                 types.String `tfsdk:"id"`
+	Name               types.String `tfsdk:"name"`
+	Collation          types.String `tfsdk:"collation"`
+	CompatibilityLevel types.Int64  `tfsdk:"compatibility_level"`
+	RecoveryModel      types.String `tfsdk:"recovery_model"`
+}
+
+func databaseDataSourceModel(db mssql.Database) DatabaseDataSourceModel {
+	return DatabaseDataSourceModel{
+		ID:                 types.StringValue(strconv.Itoa(db.ID)),
+		Name:               types.StringValue(db.Name),
+		Collation:          types.StringValue(db.Collation),
+		CompatibilityLevel: types.Int64Value(int64(db.CompatibilityLevel)),
+		RecoveryModel:      types.StringValue(db.RecoveryModel),
+	}
 }
 
 func (d *DatabaseDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -42,6 +55,18 @@ func (d *DatabaseDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 			},
 			"name": schema.StringAttribute{
 				Required: true,
+			},
+			"collation": schema.StringAttribute{
+				Description: "The collation of the database.",
+				Computed:    true,
+			},
+			"compatibility_level": schema.Int64Attribute{
+				Description: "The compatibility level of the database.",
+				Computed:    true,
+			},
+			"recovery_model": schema.StringAttribute{
+				Description: "The recovery model of the database: `FULL`, `SIMPLE` or `BULK_LOGGED`.",
+				Computed:    true,
 			},
 		},
 	}
@@ -76,8 +101,7 @@ func (d *DatabaseDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	data.ID = types.StringValue(strconv.Itoa(db.ID))
-	data.Name = types.StringValue(db.Name)
+	data = databaseDataSourceModel(*db)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -108,8 +132,11 @@ func (d *DatabasesDataSource) Schema(ctx context.Context, req datasource.SchemaR
 				Computed: true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"id":   schema.StringAttribute{Computed: true},
-						"name": schema.StringAttribute{Computed: true},
+						"id":                  schema.StringAttribute{Computed: true},
+						"name":                schema.StringAttribute{Computed: true},
+						"collation":           schema.StringAttribute{Computed: true},
+						"compatibility_level": schema.Int64Attribute{Computed: true},
+						"recovery_model":      schema.StringAttribute{Computed: true},
 					},
 				},
 			},
@@ -139,10 +166,7 @@ func (d *DatabasesDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 
 	for _, db := range dbs {
-		data.Databases = append(data.Databases, DatabaseDataSourceModel{
-			ID:   types.StringValue(strconv.Itoa(db.ID)),
-			Name: types.StringValue(db.Name),
-		})
+		data.Databases = append(data.Databases, databaseDataSourceModel(db))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

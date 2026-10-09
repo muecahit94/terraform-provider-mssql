@@ -28,3 +28,6 @@ output "database_id" {
 ## Attribute Reference
 
 - `id` - The database ID.
+- `collation` - The collation of the database.
+- `compatibility_level` - The compatibility level of the database, for example `160`.
+- `recovery_model` - The recovery model: `FULL`, `SIMPLE` or `BULK_LOGGED`.
