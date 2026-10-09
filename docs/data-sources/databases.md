@@ -17,6 +17,11 @@ data "mssql_databases" "all" {}
 output "database_names" {
   value = [for db in data.mssql_databases.all.databases : db.name]
 }
+
+# Databases that are not in the SIMPLE recovery model
+output "databases_with_log_backups" {
+  value = [for db in data.mssql_databases.all.databases : db.name if db.recovery_model != "SIMPLE"]
+}
 ```
 
 ## Argument Reference
@@ -28,3 +33,6 @@ This data source has no required arguments.
 - `databases` - A list of databases, each with:
   - `id` - The database ID.
   - `name` - The database name.
+  - `collation` - The collation of the database.
+  - `compatibility_level` - The compatibility level of the database.
+  - `recovery_model` - The recovery model: `FULL`, `SIMPLE` or `BULK_LOGGED`.
