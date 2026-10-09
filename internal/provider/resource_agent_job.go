@@ -415,7 +415,7 @@ func stepsEqual(a, b []AgentJobStepModel) bool {
 	for i := range a {
 		x, y := a[i], b[i]
 		if !x.Name.Equal(y.Name) || !x.Subsystem.Equal(y.Subsystem) || !x.Command.Equal(y.Command) ||
-			!(x.DatabaseName.IsUnknown() || x.DatabaseName.Equal(y.DatabaseName)) ||
+			(!x.DatabaseName.IsUnknown() && !x.DatabaseName.Equal(y.DatabaseName)) ||
 			!x.OnSuccessAction.Equal(y.OnSuccessAction) || !x.OnSuccessStepID.Equal(y.OnSuccessStepID) ||
 			!x.OnFailAction.Equal(y.OnFailAction) || !x.OnFailStepID.Equal(y.OnFailStepID) ||
 			!x.RetryAttempts.Equal(y.RetryAttempts) || !x.RetryInterval.Equal(y.RetryInterval) {
@@ -438,7 +438,7 @@ func schedulesEqual(a, b map[string]AgentJobScheduleModel) bool {
 		if !x.Enabled.Equal(y.Enabled) || !x.FreqType.Equal(y.FreqType) || !x.FreqInterval.Equal(y.FreqInterval) ||
 			!x.FreqSubdayType.Equal(y.FreqSubdayType) || !x.FreqSubdayInterval.Equal(y.FreqSubdayInterval) ||
 			!x.FreqRelativeInterval.Equal(y.FreqRelativeInterval) || !x.FreqRecurrenceFactor.Equal(y.FreqRecurrenceFactor) ||
-			!(x.ActiveStartDate.IsUnknown() || x.ActiveStartDate.Equal(y.ActiveStartDate)) ||
+			(!x.ActiveStartDate.IsUnknown() && !x.ActiveStartDate.Equal(y.ActiveStartDate)) ||
 			!x.ActiveEndDate.Equal(y.ActiveEndDate) || !x.ActiveStartTime.Equal(y.ActiveStartTime) || !x.ActiveEndTime.Equal(y.ActiveEndTime) {
 			return false
 		}
