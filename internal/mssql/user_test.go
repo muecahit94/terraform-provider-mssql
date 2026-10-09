@@ -41,3 +41,17 @@ func TestCreateUserStatement(t *testing.T) {
 		}
 	}
 }
+
+func TestAlterUserLoginStatement(t *testing.T) {
+	tests := []struct{ user, login, want string }{
+		{"app", "app_login", "ALTER USER [app] WITH LOGIN = [app_login]"},
+		{`DOMAIN\u`, `DOMAIN\u`, `ALTER USER [DOMAIN\u] WITH LOGIN = [DOMAIN\u]`},
+		{"a]b", "c]d", "ALTER USER [a]]b] WITH LOGIN = [c]]d]"},
+		{"x", "y]; DROP USER z; --", "ALTER USER [x] WITH LOGIN = [y]]; DROP USER z; --]"},
+	}
+	for _, tt := range tests {
+		if got := alterUserLoginStatement(tt.user, tt.login); got != tt.want {
+			t.Errorf("alterUserLoginStatement(%q, %q) = %q, want %q", tt.user, tt.login, got, tt.want)
+		}
+	}
+}

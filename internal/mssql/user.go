@@ -57,6 +57,8 @@ type User struct {
 	DefaultSchemaName string
 	Type              string // S = SQL user, U = Windows user, E = External user (Azure AD)
 	LoginName         string
+	// AuthenticationType is INSTANCE (a login), WINDOWS, NONE (created WITHOUT LOGIN) or EXTERNAL.
+	AuthenticationType string
 }
 
 // Request a user from a specific database.
@@ -76,7 +78,8 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
-			ISNULL(sp.name, '')
+			ISNULL(sp.name, ''),
+			dp.authentication_type_desc
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
@@ -97,7 +100,8 @@ func (c *Client) getUserWithDB(ctx context.Context, db *sql.DB, userName string)
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
-			ISNULL(sp.name, '')
+			ISNULL(sp.name, ''),
+			dp.authentication_type_desc
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
@@ -115,6 +119,7 @@ func scanUser(row *sql.Row) (*User, error) {
 		&user.DefaultSchemaName,
 		&user.Type,
 		&user.LoginName,
+		&user.AuthenticationType,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -134,7 +139,8 @@ func (c *Client) GetUserByID(ctx context.Context, databaseName string, principal
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
-			ISNULL(sp.name, '')
+			ISNULL(sp.name, ''),
+			dp.authentication_type_desc
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.principal_id = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
@@ -184,7 +190,8 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 			DB_ID() as database_id,
 			ISNULL(dp.default_schema_name, 'dbo'),
 			dp.type,
-			ISNULL(sp.name, '')
+			ISNULL(sp.name, ''),
+			dp.authentication_type_desc
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
 		WHERE dp.type IN (` + userPrincipalTypes + `)
@@ -206,6 +213,7 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 			&user.DefaultSchemaName,
 			&user.Type,
 			&user.LoginName,
+			&user.AuthenticationType,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
@@ -213,6 +221,24 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 	}
 
 	return users, rows.Err()
+}
+
+// AuthenticationTypeNone is the authentication type of a user created WITHOUT LOGIN.
+const AuthenticationTypeNone = "NONE"
+
+// alterUserLoginStatement builds the statement that maps a user to another login.
+func alterUserLoginStatement(userName, loginName string) string {
+	return "ALTER USER " + quoteName(userName) + " WITH LOGIN = " + quoteName(loginName)
+}
+
+// RelinkUser maps a user to another login with ALTER USER ... WITH LOGIN: the user, its permissions and its
+// role memberships stay. It also fixes an orphaned user, whose SID matches no login. SQL Server cannot
+// do it for a user that was created WITHOUT LOGIN.
+func (c *Client) RelinkUser(ctx context.Context, databaseName, userName, loginName string) error {
+	if _, err := c.ExecContext(ctx, "EXEC "+quoteName(databaseName)+".sys.sp_executesql @p1", alterUserLoginStatement(userName, loginName)); err != nil {
+		return fmt.Errorf("failed to map the user to the login: %w", err)
+	}
+	return nil
 }
 
 // createUserStatement builds CREATE USER. An empty login creates a user without a login

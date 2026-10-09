@@ -5,15 +5,18 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -73,10 +76,13 @@ func (r *SQLUserResource) Schema(ctx context.Context, req resource.SchemaRequest
 			"login_name": schema.StringAttribute{
 				Description: "The name of the login to map this user to. Omit it for a user without a login " +
 					"(`CREATE USER ... WITHOUT LOGIN`), which is also how users that lost their login after a " +
-					"database restore (orphaned users) are represented. Changing this forces a new resource.",
+					"database restore (orphaned users) are represented. Changing it maps the user to the other " +
+					"login in place (`ALTER USER ... WITH LOGIN`), keeping its permissions and roles, and also " +
+					"relinks an orphaned user. Only a user created without a login, or a change to no login at all, " +
+					"forces a new resource.",
 				Optional: true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					loginNameReplaceModifier{},
 				},
 			},
 			"default_schema": schema.StringAttribute{
@@ -89,6 +95,9 @@ func (r *SQLUserResource) Schema(ctx context.Context, req resource.SchemaRequest
 				Description: "List of database roles to assign to this user.",
 				Optional:    true,
 				Computed:    true,
+				PlanModifiers: []planmodifier.Set{
+					setplanmodifier.UseStateForUnknown(),
+				},
 				ElementType: types.StringType,
 			},
 		},
@@ -137,6 +146,7 @@ func (r *SQLUserResource) Create(ctx context.Context, req resource.CreateRequest
 		resp.Diagnostics.AddError("Failed to create SQL user", err.Error())
 		return
 	}
+	resp.Diagnostics.Append(setAuthenticationType(ctx, resp.Private, user.AuthenticationType)...)
 
 	// Assign roles if specified
 	var roles []string
@@ -195,6 +205,7 @@ func (r *SQLUserResource) Read(ctx context.Context, req resource.ReadRequest, re
 	data.ID = types.StringValue(fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))
 	data.DefaultSchema = types.StringValue(user.DefaultSchemaName)
 	data.LoginName = loginNameValue(user.LoginName)
+	resp.Diagnostics.Append(setAuthenticationType(ctx, resp.Private, user.AuthenticationType)...)
 
 	// Read user's roles
 	roles, err := r.client.GetUserRoles(ctx, data.DatabaseName.ValueString(), data.Name.ValueString())
@@ -237,6 +248,14 @@ func (r *SQLUserResource) Update(ctx context.Context, req resource.UpdateRequest
 		opts.DefaultSchema = &schema
 	}
 
+	// Map the user to another login in place; a change that would need a new user was replaced in the plan.
+	if !data.LoginName.IsNull() && !data.LoginName.IsUnknown() && !data.LoginName.Equal(state.LoginName) {
+		if err := r.client.RelinkUser(ctx, data.DatabaseName.ValueString(), data.Name.ValueString(), data.LoginName.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Failed to map the SQL user to the login", err.Error())
+			return
+		}
+	}
+
 	_, err := r.client.UpdateSQLUser(ctx, opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update SQL user", err.Error())
@@ -244,7 +263,8 @@ func (r *SQLUserResource) Update(ctx context.Context, req resource.UpdateRequest
 	}
 
 	// Update roles if changed
-	if !data.Roles.Equal(state.Roles) {
+	// Unknown roles (not configured) are left as they are.
+	if !data.Roles.IsUnknown() && !data.Roles.Equal(state.Roles) {
 		var desiredRoles, currentRoles []string
 		resp.Diagnostics.Append(data.Roles.ElementsAs(ctx, &desiredRoles, false)...)
 		resp.Diagnostics.Append(state.Roles.ElementsAs(ctx, &currentRoles, false)...)
@@ -346,6 +366,49 @@ func (r *SQLUserResource) ImportState(ctx context.Context, req resource.ImportSt
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), user.Name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("login_name"), loginNameValue(user.LoginName))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_schema"), user.DefaultSchemaName)...)
+}
+
+// authenticationTypeKey is the private state key that remembers how the user authenticates.
+const authenticationTypeKey = "authentication_type"
+
+// setAuthenticationType remembers the authentication type of a user in the private state.
+func setAuthenticationType(ctx context.Context, private interface {
+	SetKey(context.Context, string, []byte) diag.Diagnostics
+}, authenticationType string) diag.Diagnostics {
+	value, _ := json.Marshal(authenticationType)
+	return private.SetKey(ctx, authenticationTypeKey, value)
+}
+
+// loginNameReplaceModifier decides between mapping a user to another login in place and replacing it.
+type loginNameReplaceModifier struct{}
+
+func (m loginNameReplaceModifier) Description(ctx context.Context) string {
+	return "Maps the user to another login in place; replaces it when that is impossible."
+}
+
+func (m loginNameReplaceModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (m loginNameReplaceModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	// create, destroy, or nothing changes
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() || req.PlanValue.Equal(req.StateValue) || req.PlanValue.IsUnknown() {
+		return
+	}
+
+	// A mapped user cannot become a user without a login.
+	if req.PlanValue.IsNull() {
+		resp.RequiresReplace = true
+		return
+	}
+
+	// A user that was never mapped (created WITHOUT LOGIN) cannot be mapped to a login;
+	// an orphaned user, whose login is gone, can.
+	if req.StateValue.IsNull() && req.Private != nil {
+		if raw, _ := req.Private.GetKey(ctx, authenticationTypeKey); string(raw) == `"`+mssql.AuthenticationTypeNone+`"` {
+			resp.RequiresReplace = true
+		}
+	}
 }
 
 // loginNameValue maps the empty login of a user without a (matching) login to null, so that a
