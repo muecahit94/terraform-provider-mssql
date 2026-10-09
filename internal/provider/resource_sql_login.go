@@ -103,8 +103,7 @@ func validateLoginPassword(data SQLLoginResourceModel) diag.Diagnostics {
 	passwordSet := !data.Password.IsNull()
 	writeOnlySet := !data.PasswordWO.IsNull()
 
-	switch {
-	case passwordSet && writeOnlySet:
+	if passwordSet && writeOnlySet {
 		diags.AddAttributeError(
 			path.Root("password_wo"),
 			"Conflicting password attributes",
