@@ -67,7 +67,7 @@ resource "mssql_linked_server" "reporting" {
 - `provider_name` - (Optional) The OLE DB provider identifier (PROGID), for example `MSOLEDBSQL` or `MSDASQL`. Named `provider_name` because `provider` is reserved by Terraform. Changing this forces a new resource.
 - `data_source` - (Optional) The name of the data source as interpreted by the OLE DB provider. Changing this forces a new resource.
 - `location` - (Optional) The location of the database as interpreted by the OLE DB provider. Changing this forces a new resource.
-- `provider_string` - (Optional) The OLE DB provider-specific connection string. Changing this forces a new resource.
+- `provider_string` - (Optional, Sensitive) The OLE DB provider-specific connection string. It commonly embeds credentials (for example `Uid`/`Pwd` of an ODBC connection string), so it is marked sensitive; it is nevertheless stored in the state, which should be encrypted. SQL Server returns it on read, so an existing linked server can be imported and the attribute left out of the configuration. Changing this forces a new resource.
 - `catalog` - (Optional) The catalog or default database to use when connecting to the provider. Changing this forces a new resource.
 - `rpc` - (Optional) Enables remote procedure calls from the remote server to this server. Defaults to `false`.
 - `rpc_out` - (Optional) Enables remote procedure calls from this server to the remote server. Defaults to `false`.

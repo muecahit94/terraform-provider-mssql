@@ -55,11 +55,12 @@ type LinkedServerResourceModel struct {
 // definitionAttribute builds an attribute that sp_addlinkedserver sets at creation and
 // SQL Server cannot alter, so a change forces a new linked server. It is Computed because
 // SQL Server fills in some of them itself, for example the provider of a SQL Server product.
-func definitionAttribute(description string) schema.StringAttribute {
+func definitionAttribute(description string, sensitive bool) schema.StringAttribute {
 	return schema.StringAttribute{
 		Description: description + " Changing this forces a new resource to be created.",
 		Optional:    true,
 		Computed:    true,
+		Sensitive:   sensitive,
 		PlanModifiers: []planmodifier.String{
 			stringplanmodifier.RequiresReplace(),
 			stringplanmodifier.UseStateForUnknown(),
@@ -89,12 +90,12 @@ func (r *LinkedServerResource) Schema(ctx context.Context, req resource.SchemaRe
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"product":         definitionAttribute("The product name of the data source. Use `SQL Server` for a remote SQL Server whose network name is `name` (no `data_source` needed), or an empty string together with `provider_name` otherwise."),
-			"provider_name":   definitionAttribute("The unique programmatic identifier (PROGID) of the OLE DB provider, for example `MSOLEDBSQL` or `MSDASQL`. Named `provider_name` because `provider` is reserved by Terraform."),
-			"data_source":     definitionAttribute("The name of the data source as interpreted by the OLE DB provider."),
-			"location":        definitionAttribute("The location of the database as interpreted by the OLE DB provider."),
-			"provider_string": definitionAttribute("The OLE DB provider-specific connection string."),
-			"catalog":         definitionAttribute("The catalog or default database to use when connecting to the provider."),
+			"product":         definitionAttribute("The product name of the data source. Use `SQL Server` for a remote SQL Server whose network name is `name` (no `data_source` needed), or an empty string together with `provider_name` otherwise.", false),
+			"provider_name":   definitionAttribute("The unique programmatic identifier (PROGID) of the OLE DB provider, for example `MSOLEDBSQL` or `MSDASQL`. Named `provider_name` because `provider` is reserved by Terraform.", false),
+			"data_source":     definitionAttribute("The name of the data source as interpreted by the OLE DB provider.", false),
+			"location":        definitionAttribute("The location of the database as interpreted by the OLE DB provider.", false),
+			"provider_string": definitionAttribute("The OLE DB provider-specific connection string. Marked sensitive because it commonly embeds credentials, for example `Uid`/`Pwd` of an ODBC connection string. It is read back from the server, so an existing linked server can be imported and the attribute left out of the configuration.", true),
+			"catalog":         definitionAttribute("The catalog or default database to use when connecting to the provider.", false),
 			"rpc": schema.BoolAttribute{
 				Description: "Enables remote procedure calls from the remote server to this server. Defaults to `false`.",
 				Optional:    true,

@@ -27,6 +27,16 @@ func TestLinkedServerResourceSchema(t *testing.T) {
 	}
 }
 
+func TestLinkedServerProviderStringIsSensitive(t *testing.T) {
+	ctx := context.Background()
+	resp := &fwresource.SchemaResponse{}
+	NewLinkedServerResource().Schema(ctx, fwresource.SchemaRequest{}, resp)
+
+	if !resp.Schema.Attributes["provider_string"].IsSensitive() {
+		t.Error("provider_string must be sensitive: connection strings commonly embed credentials")
+	}
+}
+
 func TestLinkedServerLoginResourceSchema(t *testing.T) {
 	ctx := context.Background()
 	resp := &fwresource.SchemaResponse{}
