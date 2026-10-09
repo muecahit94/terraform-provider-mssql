@@ -7,7 +7,7 @@ A Terraform provider to manage Microsoft SQL Server and Azure SQL resources.
 - **Full SQL Server Support**: Manage databases, logins, users, roles, schemas, and permissions
 - **Azure SQL Compatible**: Works with Azure SQL Database and Managed Instance
 - **Azure AD Authentication**: Support for service principals and managed identities
-- **Write-Only Passwords**: `mssql_sql_login` takes ephemeral passwords that reach neither the plan nor the state file
+- **Write-Only Passwords**: `mssql_sql_login` and `mssql_linked_server_login` take ephemeral passwords that reach neither the plan nor the state file
 - **Resilient Design**: Gracefully handles ID changes and manual modifications
 
 ## Requirements
@@ -90,6 +90,8 @@ provider "mssql" {
 | `mssql_database_permission` | Database-level permission |
 | `mssql_schema` | Database schema |
 | `mssql_schema_permission` | Schema-level permission |
+| `mssql_linked_server` | Linked server |
+| `mssql_linked_server_login` | Linked server login mapping |
 | `mssql_server_role` | Server role |
 | `mssql_server_role_member` | Server role membership |
 | `mssql_server_permission` | Server-level permission |
