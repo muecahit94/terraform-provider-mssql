@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.6.0...v1.7.0) (2026-10-09)
+
+
+### Features
+
+* add mssql_linked_server and mssql_linked_server_login resources ([#32](https://github.com/muecahit94/terraform-provider-mssql/issues/32)) ([af15a14](https://github.com/muecahit94/terraform-provider-mssql/commit/af15a1482510c936f87bd9c08116c47e4f78685c))
+* **database:** manage collation, compatibility level and recovery model ([#33](https://github.com/muecahit94/terraform-provider-mssql/issues/33)) ([bb12472](https://github.com/muecahit94/terraform-provider-mssql/commit/bb124728e9b6262135daa6f0f0e5fe943053be72))
+
 ## [1.6.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.5.0...v1.6.0) (2026-10-05)
 
 
