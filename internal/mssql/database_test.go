@@ -51,3 +51,17 @@ func TestCreateDatabaseRejectsInvalidCollation(t *testing.T) {
 		t.Error("CreateDatabase with an injected collation should fail before reaching the server")
 	}
 }
+
+func TestAlterAuthorizationStatement(t *testing.T) {
+	tests := []struct{ database, login, want string }{
+		{"app", "app_owner", "ALTER AUTHORIZATION ON DATABASE::[app] TO [app_owner]"},
+		{"my db", `DOMAIN\user`, `ALTER AUTHORIZATION ON DATABASE::[my db] TO [DOMAIN\user]`},
+		{"a]b", "c]d", "ALTER AUTHORIZATION ON DATABASE::[a]]b] TO [c]]d]"},
+		{"x", "y]; DROP LOGIN z; --", "ALTER AUTHORIZATION ON DATABASE::[x] TO [y]]; DROP LOGIN z; --]"},
+	}
+	for _, tt := range tests {
+		if got := alterAuthorizationStatement(tt.database, tt.login); got != tt.want {
+			t.Errorf("alterAuthorizationStatement(%q, %q) = %q, want %q", tt.database, tt.login, got, tt.want)
+		}
+	}
+}

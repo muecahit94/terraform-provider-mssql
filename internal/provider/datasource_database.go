@@ -30,6 +30,7 @@ type DatabaseDataSourceModel struct {
 	Collation          types.String `tfsdk:"collation"`
 	CompatibilityLevel types.Int64  `tfsdk:"compatibility_level"`
 	RecoveryModel      types.String `tfsdk:"recovery_model"`
+	OwnerName          types.String `tfsdk:"owner_name"`
 }
 
 func databaseDataSourceModel(db mssql.Database) DatabaseDataSourceModel {
@@ -39,6 +40,7 @@ func databaseDataSourceModel(db mssql.Database) DatabaseDataSourceModel {
 		Collation:          types.StringValue(db.Collation),
 		CompatibilityLevel: types.Int64Value(int64(db.CompatibilityLevel)),
 		RecoveryModel:      types.StringValue(db.RecoveryModel),
+		OwnerName:          types.StringValue(db.Owner),
 	}
 }
 
@@ -66,6 +68,10 @@ func (d *DatabaseDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 			},
 			"recovery_model": schema.StringAttribute{
 				Description: "The recovery model of the database: `FULL`, `SIMPLE` or `BULK_LOGGED`.",
+				Computed:    true,
+			},
+			"owner_name": schema.StringAttribute{
+				Description: "The login that owns the database; empty when the owner login no longer exists.",
 				Computed:    true,
 			},
 		},
@@ -137,6 +143,7 @@ func (d *DatabasesDataSource) Schema(ctx context.Context, req datasource.SchemaR
 						"collation":           schema.StringAttribute{Computed: true},
 						"compatibility_level": schema.Int64Attribute{Computed: true},
 						"recovery_model":      schema.StringAttribute{Computed: true},
+						"owner_name":          schema.StringAttribute{Computed: true},
 					},
 				},
 			},

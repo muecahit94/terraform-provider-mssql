@@ -18,6 +18,8 @@ type Database struct {
 	Collation          string
 	CompatibilityLevel int
 	RecoveryModel      string
+	// Owner is the login that owns the database; empty when the owner login no longer exists.
+	Owner string
 }
 
 // RecoveryModels are the values SQL Server accepts for a database recovery model.
@@ -39,12 +41,13 @@ const databaseSelect = `
 		name,
 		ISNULL(collation_name, ''),
 		compatibility_level,
-		recovery_model_desc
+		recovery_model_desc,
+		ISNULL(SUSER_SNAME(owner_sid), '')
 	FROM sys.databases`
 
 func scanDatabase(s interface{ Scan(dest ...any) error }) (*Database, error) {
 	var db Database
-	if err := s.Scan(&db.ID, &db.Name, &db.Collation, &db.CompatibilityLevel, &db.RecoveryModel); err != nil {
+	if err := s.Scan(&db.ID, &db.Name, &db.Collation, &db.CompatibilityLevel, &db.RecoveryModel, &db.Owner); err != nil {
 		return nil, err
 	}
 	return &db, nil
@@ -105,6 +108,8 @@ type CreateDatabaseOptions struct {
 	CompatibilityLevel int
 	// RecoveryModel is applied after creation. Empty keeps the server default.
 	RecoveryModel string
+	// Owner is the login that becomes the owner after creation. Empty keeps the creator.
+	Owner string
 }
 
 // CreateDatabase creates a new database.
@@ -132,7 +137,26 @@ func (c *Client) CreateDatabase(ctx context.Context, opts CreateDatabaseOptions)
 		}
 	}
 
+	if opts.Owner != "" {
+		if err := c.SetDatabaseOwner(ctx, opts.Name, opts.Owner); err != nil {
+			return nil, err
+		}
+	}
+
 	return c.GetDatabase(ctx, opts.Name)
+}
+
+// alterAuthorizationStatement builds the statement that changes the owner of a database.
+func alterAuthorizationStatement(database, login string) string {
+	return "ALTER AUTHORIZATION ON DATABASE::" + quoteName(database) + " TO " + quoteName(login)
+}
+
+// SetDatabaseOwner makes a login the owner of a database.
+func (c *Client) SetDatabaseOwner(ctx context.Context, name, login string) error {
+	if _, err := c.ExecContext(ctx, alterAuthorizationStatement(name, login)); err != nil {
+		return fmt.Errorf("failed to set database owner: %w", err)
+	}
+	return nil
 }
 
 // SetDatabaseCompatibilityLevel changes the compatibility level of a database.

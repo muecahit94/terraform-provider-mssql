@@ -10,4 +10,5 @@ resource "mssql_database" "example" {
   collation           = "SQL_Latin1_General_CP1_CI_AS"
   compatibility_level = 160
   recovery_model      = "SIMPLE"
+  owner_name          = "app_owner"
 }
