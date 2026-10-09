@@ -185,6 +185,7 @@ func (p *MSSQLProvider) Resources(ctx context.Context) []func() resource.Resourc
 		NewDatabaseRoleResource,
 		NewDatabaseRoleMemberResource,
 		NewDatabasePermissionResource,
+		NewDatabaseObjectPermissionResource,
 		NewSchemaResource,
 		NewSchemaPermissionResource,
 		NewServerRoleResource,

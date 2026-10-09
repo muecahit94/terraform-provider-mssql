@@ -88,6 +88,7 @@ provider "mssql" {
 | `mssql_database_role` | Database role |
 | `mssql_database_role_member` | Database role membership |
 | `mssql_database_permission` | Database-level permission |
+| `mssql_database_object_permission` | Object- and column-level permission |
 | `mssql_schema` | Database schema |
 | `mssql_schema_permission` | Schema-level permission |
 | `mssql_linked_server` | Linked server |
