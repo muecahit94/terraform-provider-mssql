@@ -1,7 +1,8 @@
 resource "mssql_linked_server" "remote_sql" {
-  name        = "REMOTE_SQL"
-  product     = "SQL Server"
-  data_source = "sql-02.corp.internal"
+  name          = "REMOTE_SQL"
+  product       = ""
+  provider_name = "MSOLEDBSQL"
+  data_source   = "sql-02.corp.internal"
 }
 
 # Map all local logins to one remote login

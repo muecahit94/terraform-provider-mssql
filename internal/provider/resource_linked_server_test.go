@@ -202,6 +202,51 @@ func TestLinkedServerLoginPassword(t *testing.T) {
 	}
 }
 
+func TestLinkedServerValidateConfigSQLServerProduct(t *testing.T) {
+	ctx := context.Background()
+	schemaResp := &fwresource.SchemaResponse{}
+	r := NewLinkedServerResource()
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+
+	str := func(v interface{}) tftypes.Value { return tftypes.NewValue(tftypes.String, v) }
+	tests := []struct {
+		name       string
+		product    tftypes.Value
+		provider   tftypes.Value
+		dataSource tftypes.Value
+		wantError  bool
+	}{
+		{"SQL Server product alone", str("SQL Server"), str(nil), str(nil), false},
+		{"SQL Server product with data source", str("SQL Server"), str(nil), str("host"), true},
+		{"SQL Server product with provider and data source", str("SQL Server"), str("MSOLEDBSQL"), str("host"), false},
+		{"empty product with provider and data source", str(""), str("MSOLEDBSQL"), str("host"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+			values := map[string]tftypes.Value{}
+			for name, typ := range objType.AttributeTypes {
+				values[name] = tftypes.NewValue(typ, nil)
+			}
+			values["name"] = str("SRV")
+			values["product"] = tt.product
+			values["provider_name"] = tt.provider
+			values["data_source"] = tt.dataSource
+
+			req := fwresource.ValidateConfigRequest{
+				Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: tftypes.NewValue(objType, values)},
+			}
+			resp := &fwresource.ValidateConfigResponse{}
+			r.(fwresource.ResourceWithValidateConfig).ValidateConfig(ctx, req, resp)
+
+			if resp.Diagnostics.HasError() != tt.wantError {
+				t.Errorf("ValidateConfig() error = %v, wantError %v", resp.Diagnostics.Errors(), tt.wantError)
+			}
+		})
+	}
+}
+
 func TestLinkedServerValidateConfigCollation(t *testing.T) {
 	ctx := context.Background()
 	schemaResp := &fwresource.SchemaResponse{}

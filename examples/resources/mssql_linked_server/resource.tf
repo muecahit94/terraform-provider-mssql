@@ -1,8 +1,15 @@
-# Linked server to another SQL Server instance
+# Linked server named after the network name of a remote SQL Server instance
+resource "mssql_linked_server" "sql_02" {
+  name    = "sql-02.corp.internal"
+  product = "SQL Server"
+}
+
+# Linked server to another SQL Server instance under a different name
 resource "mssql_linked_server" "remote_sql" {
-  name        = "REMOTE_SQL"
-  product     = "SQL Server"
-  data_source = "sql-02.corp.internal"
+  name          = "REMOTE_SQL"
+  product       = ""
+  provider_name = "MSOLEDBSQL"
+  data_source   = "sql-02.corp.internal"
 
   rpc_out = true
 }

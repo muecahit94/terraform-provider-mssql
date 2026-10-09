@@ -16,13 +16,28 @@ remote server is unreachable.
 
 ## Example Usage
 
-### Linked SQL Server
+### Linked SQL Server by Network Name
+
+With `product = "SQL Server"` the linked server `name` is the network name of the remote instance, and no `data_source` is
+needed:
+
+```hcl
+resource "mssql_linked_server" "sql_02" {
+  name    = "sql-02.corp.internal"
+  product = "SQL Server"
+}
+```
+
+### Linked SQL Server Under a Different Name
+
+To give the linked server a name other than the network name, use an OLE DB provider and leave `product` empty:
 
 ```hcl
 resource "mssql_linked_server" "remote_sql" {
-  name        = "REMOTE_SQL"
-  product     = "SQL Server"
-  data_source = "sql-02.corp.internal"
+  name          = "REMOTE_SQL"
+  product       = ""
+  provider_name = "MSOLEDBSQL"
+  data_source   = "sql-02.corp.internal"
 
   rpc_out = true
 }

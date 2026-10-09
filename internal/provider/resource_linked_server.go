@@ -89,7 +89,7 @@ func (r *LinkedServerResource) Schema(ctx context.Context, req resource.SchemaRe
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"product":         definitionAttribute("The product name of the data source. Use `SQL Server` for a remote SQL Server, or an empty string otherwise."),
+			"product":         definitionAttribute("The product name of the data source. Use `SQL Server` for a remote SQL Server whose network name is `name` (no `data_source` needed), or an empty string together with `provider_name` otherwise."),
 			"provider_name":   definitionAttribute("The unique programmatic identifier (PROGID) of the OLE DB provider, for example `MSOLEDBSQL` or `MSDASQL`. Named `provider_name` because `provider` is reserved by Terraform."),
 			"data_source":     definitionAttribute("The name of the data source as interpreted by the OLE DB provider."),
 			"location":        definitionAttribute("The location of the database as interpreted by the OLE DB provider."),
@@ -174,6 +174,19 @@ func (r *LinkedServerResource) ValidateConfig(ctx context.Context, req resource.
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// For the `SQL Server` product the linked server name is the network name of the
+	// remote instance, and SQL Server rejects a data source without an OLE DB provider.
+	if !data.Product.IsNull() && !data.Product.IsUnknown() && data.Product.ValueString() == "SQL Server" &&
+		!data.DataSource.IsNull() && data.ProviderName.IsNull() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("data_source"),
+			"Conflicting data source settings",
+			"`data_source` cannot be combined with `product = \"SQL Server\"` unless `provider_name` is set. "+
+				"With that product the linked server `name` is the network name of the remote instance; "+
+				"to use a different name, set `provider_name` (for example `MSOLEDBSQL`) and `product = \"\"`.",
+		)
 	}
 
 	// An unknown value is resolved at apply time and is not rejected here.
