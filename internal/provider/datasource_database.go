@@ -30,6 +30,14 @@ type DatabaseDataSourceModel struct {
 	Collation          types.String `tfsdk:"collation"`
 	CompatibilityLevel types.Int64  `tfsdk:"compatibility_level"`
 	RecoveryModel      types.String `tfsdk:"recovery_model"`
+
+	AutoClose             types.Bool   `tfsdk:"auto_close"`
+	AutoShrink            types.Bool   `tfsdk:"auto_shrink"`
+	PageVerify            types.String `tfsdk:"page_verify"`
+	SnapshotIsolation     types.Bool   `tfsdk:"snapshot_isolation"`
+	ReadCommittedSnapshot types.Bool   `tfsdk:"read_committed_snapshot"`
+	QueryStore            types.Bool   `tfsdk:"query_store"`
+	Trustworthy           types.Bool   `tfsdk:"trustworthy"`
 }
 
 func databaseDataSourceModel(db mssql.Database) DatabaseDataSourceModel {
@@ -39,6 +47,14 @@ func databaseDataSourceModel(db mssql.Database) DatabaseDataSourceModel {
 		Collation:          types.StringValue(db.Collation),
 		CompatibilityLevel: types.Int64Value(int64(db.CompatibilityLevel)),
 		RecoveryModel:      types.StringValue(db.RecoveryModel),
+
+		AutoClose:             types.BoolValue(db.AutoClose),
+		AutoShrink:            types.BoolValue(db.AutoShrink),
+		PageVerify:            types.StringValue(db.PageVerify),
+		SnapshotIsolation:     types.BoolValue(db.SnapshotIsolation),
+		ReadCommittedSnapshot: types.BoolValue(db.ReadCommittedSnapshot),
+		QueryStore:            types.BoolValue(db.QueryStore),
+		Trustworthy:           types.BoolValue(db.Trustworthy),
 	}
 }
 
@@ -68,6 +84,13 @@ func (d *DatabaseDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 				Description: "The recovery model of the database: `FULL`, `SIMPLE` or `BULK_LOGGED`.",
 				Computed:    true,
 			},
+			"auto_close":              schema.BoolAttribute{Description: "Whether `AUTO_CLOSE` is on.", Computed: true},
+			"auto_shrink":             schema.BoolAttribute{Description: "Whether `AUTO_SHRINK` is on.", Computed: true},
+			"page_verify":             schema.StringAttribute{Description: "`CHECKSUM`, `TORN_PAGE_DETECTION` or `NONE`.", Computed: true},
+			"snapshot_isolation":      schema.BoolAttribute{Description: "Whether snapshot isolation is allowed.", Computed: true},
+			"read_committed_snapshot": schema.BoolAttribute{Description: "Whether `READ_COMMITTED_SNAPSHOT` is on.", Computed: true},
+			"query_store":             schema.BoolAttribute{Description: "Whether Query Store is on.", Computed: true},
+			"trustworthy":             schema.BoolAttribute{Description: "Whether `TRUSTWORTHY` is on.", Computed: true},
 		},
 	}
 }
@@ -132,11 +155,18 @@ func (d *DatabasesDataSource) Schema(ctx context.Context, req datasource.SchemaR
 				Computed: true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"id":                  schema.StringAttribute{Computed: true},
-						"name":                schema.StringAttribute{Computed: true},
-						"collation":           schema.StringAttribute{Computed: true},
-						"compatibility_level": schema.Int64Attribute{Computed: true},
-						"recovery_model":      schema.StringAttribute{Computed: true},
+						"id":                      schema.StringAttribute{Computed: true},
+						"name":                    schema.StringAttribute{Computed: true},
+						"collation":               schema.StringAttribute{Computed: true},
+						"compatibility_level":     schema.Int64Attribute{Computed: true},
+						"recovery_model":          schema.StringAttribute{Computed: true},
+						"auto_close":              schema.BoolAttribute{Computed: true},
+						"auto_shrink":             schema.BoolAttribute{Computed: true},
+						"page_verify":             schema.StringAttribute{Computed: true},
+						"snapshot_isolation":      schema.BoolAttribute{Computed: true},
+						"read_committed_snapshot": schema.BoolAttribute{Computed: true},
+						"query_store":             schema.BoolAttribute{Computed: true},
+						"trustworthy":             schema.BoolAttribute{Computed: true},
 					},
 				},
 			},

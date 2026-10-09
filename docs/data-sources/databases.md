@@ -36,3 +36,5 @@ This data source has no required arguments.
   - `collation` - The collation of the database.
   - `compatibility_level` - The compatibility level of the database.
   - `recovery_model` - The recovery model: `FULL`, `SIMPLE` or `BULK_LOGGED`.
+  - `auto_close`, `auto_shrink`, `snapshot_isolation`, `read_committed_snapshot`, `query_store`, `trustworthy` - Whether the option is on.
+  - `page_verify` - `CHECKSUM`, `TORN_PAGE_DETECTION` or `NONE`.
