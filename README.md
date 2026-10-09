@@ -84,6 +84,7 @@ provider "mssql" {
 |----------|-------------|
 | `mssql_database` | SQL Server database |
 | `mssql_sql_login` | SQL Server login |
+| `mssql_windows_login` | Windows user or group login |
 | `mssql_sql_user` | Database user mapped to login |
 | `mssql_database_role` | Database role |
 | `mssql_database_role_member` | Database role membership |
