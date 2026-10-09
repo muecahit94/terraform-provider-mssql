@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -44,6 +46,7 @@ type DatabaseResourceModel struct {
 	Collation          types.String `tfsdk:"collation"`
 	CompatibilityLevel types.Int64  `tfsdk:"compatibility_level"`
 	RecoveryModel      types.String `tfsdk:"recovery_model"`
+	DeletionProtection types.Bool   `tfsdk:"deletion_protection"`
 }
 
 // keepCase returns the configured value when it only differs from the server value by case.
@@ -120,8 +123,31 @@ func (r *DatabaseResource) Schema(ctx context.Context, req resource.SchemaReques
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"deletion_protection": schema.BoolAttribute{
+				Description: "Whether the database is protected from deletion. The provider drops a database " +
+					"(`SINGLE_USER WITH ROLLBACK IMMEDIATE`, `DROP DATABASE`) as soon as it is removed from the " +
+					"configuration or replaced, together with all of its data. While this is `true`, deleting " +
+					"or replacing the database fails; set it to `false` and apply before you delete it. " +
+					"It is a setting of Terraform only and is not stored in SQL Server. Defaults to `false`.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+			},
 		},
 	}
+}
+
+// deletionProtectionDiagnostics rejects the deletion of a protected database.
+func deletionProtectionDiagnostics(name string, protected bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if protected {
+		diags.AddError(
+			"Database deletion protection is enabled",
+			fmt.Sprintf("Database %q has deletion_protection = true, so it is not dropped. To delete or replace it, "+
+				"set deletion_protection = false in the configuration, apply that change, and delete it afterwards.", name),
+		)
+	}
+	return diags
 }
 
 // ValidateConfig checks the values that SQL Server only rejects at apply time.
@@ -326,6 +352,11 @@ func (r *DatabaseResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
+	if diags := deletionProtectionDiagnostics(data.Name.ValueString(), data.DeletionProtection.ValueBool()); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
+		return
+	}
+
 	tflog.Debug(ctx, "Deleting database", map[string]interface{}{
 		"name": data.Name.ValueString(),
 	})
@@ -360,4 +391,6 @@ func (r *DatabaseResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("collation"), db.Collation)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), int64(db.CompatibilityLevel))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), db.RecoveryModel)...)
+	// Not stored in SQL Server: an imported database starts unprotected.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("deletion_protection"), false)...)
 }
