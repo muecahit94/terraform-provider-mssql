@@ -120,12 +120,28 @@ resource "mssql_sql_login" "cluster_user" {
 }
 ```
 
+### Existing Login Without a Password in the Configuration
+
+The password of a login is not readable, so a login that already exists (imported, or created earlier) does not need
+`password` or `password_wo` in the configuration. The provider then leaves its password alone: a plan after the import
+shows no change, and an apply never resets the password that applications use.
+
+```hcl
+resource "mssql_sql_login" "existing" {
+  name             = "n_dagster"
+  default_database = "master"
+}
+```
+
+A password is only required to **create** a login; without one the plan fails with *Missing password*. To start managing
+the password later, add `password_wo` (and bump `password_wo_version` to rotate it).
+
 ## Argument Reference
 
 - `name` - (Optional) The name of the login. Exactly one of `name` or `login_name` must be set. Changing this forces a new resource.
 - `login_name` - (Optional) Alias for `name`. The name of the login. Exactly one of `name` or `login_name` must be set. Changing this forces a new resource.
-- `password` - (Optional) The password for the login. Persisted in the plan and state files. Exactly one of `password` and `password_wo` must be set.
-- `password_wo` - (Optional, [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only)) The password for the login. Accepts ephemeral values and is written to neither the plan nor the state file. Requires Terraform 1.11 or later. Exactly one of `password` and `password_wo` must be set.
+- `password` - (Optional) The password for the login. Persisted in the plan and state files. At most one of `password` and `password_wo` can be set; one of them is needed to create the login.
+- `password_wo` - (Optional, [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only)) The password for the login. Accepts ephemeral values and is written to neither the plan nor the state file. Requires Terraform 1.11 or later. At most one of `password` and `password_wo` can be set; one of them is needed to create the login.
 - `password_wo_version` - (Optional) An arbitrary token whose change triggers an `ALTER LOGIN` with the current `password_wo` value. Only valid together with `password_wo`. Without it, a rotated `password_wo` is never applied.
 - `sid` - (Optional) The SID (Security Identifier) of the login in hexadecimal format (e.g., `0x0123456789ABCDEF0123456789ABCDEF`). Changing this forces a new resource. If not specified, SQL Server generates a SID automatically.
 - `default_database` - (Optional) The default database for the login. Defaults to `master`.

@@ -77,13 +77,12 @@ func TestValidateLoginPassword(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "no password set",
+			name: "no password set (an existing login)",
 			data: SQLLoginResourceModel{
 				Password:          types.StringNull(),
 				PasswordWO:        types.StringNull(),
 				PasswordWOVersion: types.StringNull(),
 			},
-			wantError: true,
 		},
 		{
 			name: "version without password_wo",
@@ -550,4 +549,25 @@ func TestGetClient(t *testing.T) {
 			t.Errorf("expected error when provider is nil, got client %v", client)
 		}
 	})
+}
+
+func TestValidateLoginPasswordOnCreate(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    SQLLoginResourceModel
+		wantError bool
+	}{
+		{"no password", SQLLoginResourceModel{Password: types.StringNull(), PasswordWO: types.StringNull()}, true},
+		{"password", SQLLoginResourceModel{Password: types.StringValue("P@ssw0rd123!"), PasswordWO: types.StringNull()}, false},
+		{"write-only password", SQLLoginResourceModel{Password: types.StringNull(), PasswordWO: types.StringValue("P@ssw0rd123!")}, false},
+		// an ephemeral value is unknown until apply: it counts as set
+		{"unknown write-only password", SQLLoginResourceModel{Password: types.StringNull(), PasswordWO: types.StringUnknown()}, false},
+		{"unknown password", SQLLoginResourceModel{Password: types.StringUnknown(), PasswordWO: types.StringNull()}, false},
+	}
+	for _, tt := range tests {
+		diags := validateLoginPasswordOnCreate(tt.config)
+		if diags.HasError() != tt.wantError {
+			t.Errorf("%s: error = %v, wantError %v", tt.name, diags.Errors(), tt.wantError)
+		}
+	}
 }

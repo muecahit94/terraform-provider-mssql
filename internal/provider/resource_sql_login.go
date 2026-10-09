@@ -26,6 +26,7 @@ import (
 var _ resource.Resource = &SQLLoginResource{}
 var _ resource.ResourceWithImportState = &SQLLoginResource{}
 var _ resource.ResourceWithValidateConfig = &SQLLoginResource{}
+var _ resource.ResourceWithModifyPlan = &SQLLoginResource{}
 
 func NewSQLLoginResource() resource.Resource {
 	return &SQLLoginResource{}
@@ -61,7 +62,39 @@ type SQLLoginResourceModel struct {
 	Server                 *ServerModel `tfsdk:"server"`
 }
 
-// validateLoginPassword checks that exactly one of the two password attributes
+// validateLoginPasswordOnCreate rejects a new login without a password. SQL Server cannot
+// create a SQL login without one, while an existing login (imported, or created earlier)
+// needs none in the configuration: its password is not readable and is left alone.
+func validateLoginPasswordOnCreate(config SQLLoginResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if config.Password.IsNull() && config.PasswordWO.IsNull() {
+		diags.AddAttributeError(
+			path.Root("password"),
+			"Missing password",
+			"A password is needed to create a SQL login: set `password`, or `password_wo` to keep it out of the plan "+
+				"and state files (it requires Terraform 1.11 or later). A login that already exists, for example an "+
+				"imported one, needs neither; its password is then not managed.",
+		)
+	}
+	return diags
+}
+
+// ModifyPlan requires a password only when the login is about to be created.
+func (r *SQLLoginResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if !req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	var config SQLLoginResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(validateLoginPasswordOnCreate(config)...)
+}
+
+// validateLoginPassword checks that at most one of the two password attributes
 // is configured. Unknown counts as configured: an ephemeral value assigned to
 // password_wo is unknown until apply.
 func validateLoginPassword(data SQLLoginResourceModel) diag.Diagnostics {
@@ -76,13 +109,6 @@ func validateLoginPassword(data SQLLoginResourceModel) diag.Diagnostics {
 			path.Root("password_wo"),
 			"Conflicting password attributes",
 			"Only one of `password` and `password_wo` can be set.",
-		)
-	case !passwordSet && !writeOnlySet:
-		diags.AddAttributeError(
-			path.Root("password"),
-			"Missing password",
-			"One of `password` or `password_wo` must be set. Use `password_wo` to keep the "+
-				"password out of the plan and state files; it requires Terraform 1.11 or later.",
 		)
 	}
 
@@ -381,15 +407,15 @@ func (r *SQLLoginResource) Schema(ctx context.Context, req resource.SchemaReques
 			},
 			"password": schema.StringAttribute{
 				Description: "The password for the login. Persisted in the plan and state files; " +
-					"use `password_wo` instead to avoid that. Exactly one of `password` and `password_wo` must be set.",
+					"use `password_wo` instead to avoid that. At most one of `password` and `password_wo` can be set; one of them is needed to create the login, an existing login needs neither.",
 				Optional:  true,
 				Sensitive: true,
 			},
 			"password_wo": schema.StringAttribute{
 				Description: "The password for the login, as a write-only attribute. Accepts ephemeral values, " +
 					"such as those from `ephemeral.random_password`, and is written to neither the plan nor the " +
-					"state file. Requires Terraform 1.11 or later. Exactly one of `password` and `password_wo` " +
-					"must be set. Because Terraform has no stored value to compare against, changing this alone " +
+					"state file. Requires Terraform 1.11 or later. At most one of `password` and `password_wo` " +
+					"can be set. Because Terraform has no stored value to compare against, changing this alone " +
 					"does not update the login; change `password_wo_version` to apply a new password.",
 				Optional:  true,
 				Sensitive: true,
@@ -810,7 +836,8 @@ func (r *SQLLoginResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), strconv.Itoa(login.PrincipalID))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), login.Name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("sid"), login.SID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("password"), "")...)
+	// The password is not readable, so it stays unset: a configuration without one then shows no diff,
+	// and one with a password (or a new password_wo_version) writes it on the first apply.
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_database"), login.DefaultDatabaseName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_language"), login.DefaultLanguageName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("check_expiration_enabled"), login.CheckExpirationEnabled)...)
