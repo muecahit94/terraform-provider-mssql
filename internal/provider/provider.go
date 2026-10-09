@@ -193,6 +193,8 @@ func (p *MSSQLProvider) Resources(ctx context.Context) []func() resource.Resourc
 		NewScriptResource,
 		NewAzureADUserResource,
 		NewAzureADServicePrincipalResource,
+		NewLinkedServerResource,
+		NewLinkedServerLoginResource,
 	}
 }
 
