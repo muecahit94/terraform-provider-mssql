@@ -30,5 +30,5 @@ output "user_names" {
   - `id` - The ID of the user in format `database_id/principal_id`.
   - `database_name` - The database name.
   - `name` - The name of the user.
-  - `login_name` - The login name associated with the user.
+  - `login_name` - The login name associated with the user, or an empty string when no login matches the SID of the user.
   - `default_schema` - The default schema of the user.
