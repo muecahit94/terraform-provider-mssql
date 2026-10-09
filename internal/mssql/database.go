@@ -50,6 +50,23 @@ func scanDatabase(s interface{ Scan(dest ...any) error }) (*Database, error) {
 	return &db, nil
 }
 
+// collationInContextQuery reads the collation from inside the database. sys.databases returns
+// NULL for it while a database with AUTO_CLOSE ON is closed (nobody is connected), and
+// DATABASEPROPERTYEX does too; running in the context of the database opens it for the call.
+const collationInContextQuery = `SELECT CONVERT(nvarchar(128), DATABASEPROPERTYEX(DB_NAME(), N'Collation'))`
+
+// fillCollation completes the collation of a database that sys.databases reported as NULL.
+// A database that cannot be opened (offline, restoring) keeps an empty collation.
+func (c *Client) fillCollation(ctx context.Context, db *Database) {
+	if db == nil || db.Collation != "" {
+		return
+	}
+	var collation sql.NullString
+	if err := c.QueryRowContext(ctx, "EXEC "+quoteName(db.Name)+".sys.sp_executesql @p1", collationInContextQuery).Scan(&collation); err == nil && collation.Valid {
+		db.Collation = collation.String
+	}
+}
+
 // GetDatabase retrieves a database by name.
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error) {
 	db, err := scanDatabase(c.QueryRowContext(ctx, databaseSelect+` WHERE name = @p1`, name))
@@ -60,6 +77,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error
 		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
+	c.fillCollation(ctx, db)
 	return db, nil
 }
 
@@ -73,6 +91,7 @@ func (c *Client) GetDatabaseByID(ctx context.Context, id int) (*Database, error)
 		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
+	c.fillCollation(ctx, db)
 	return db, nil
 }
 
@@ -92,8 +111,15 @@ func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
 		}
 		databases = append(databases, *db)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
 
-	return databases, rows.Err()
+	for i := range databases {
+		c.fillCollation(ctx, &databases[i])
+	}
+	return databases, nil
 }
 
 // CreateDatabaseOptions contains options for creating a database.

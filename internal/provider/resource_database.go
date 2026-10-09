@@ -60,7 +60,10 @@ func keepCase(configured types.String, actual string) types.String {
 func applyDatabase(data *DatabaseResourceModel, db *mssql.Database) {
 	data.ID = types.StringValue(strconv.Itoa(db.ID))
 	data.Name = types.StringValue(db.Name)
-	data.Collation = keepCase(data.Collation, db.Collation)
+	// An empty collation means the database could not be opened (offline, restoring): keep what is known.
+	if db.Collation != "" || data.Collation.IsNull() || data.Collation.IsUnknown() {
+		data.Collation = keepCase(data.Collation, db.Collation)
+	}
 	data.CompatibilityLevel = types.Int64Value(int64(db.CompatibilityLevel))
 	data.RecoveryModel = types.StringValue(db.RecoveryModel)
 }
