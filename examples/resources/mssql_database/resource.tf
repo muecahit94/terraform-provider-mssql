@@ -11,4 +11,7 @@ resource "mssql_database" "example" {
   compatibility_level = 160
   recovery_model      = "SIMPLE"
   owner_name          = "app_owner"
+
+  # Fail instead of dropping the database when it is removed from the configuration.
+  deletion_protection = true
 }
