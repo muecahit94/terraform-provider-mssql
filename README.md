@@ -98,6 +98,7 @@ provider "mssql" {
 | `mssql_server_role_member` | Server role membership |
 | `mssql_server_permission` | Server-level permission |
 | `mssql_server_configuration` | Server configuration option (`sp_configure`) |
+| `mssql_agent_job` | SQL Server Agent job with steps and schedules |
 | `mssql_script` | Custom SQL script execution |
 | `mssql_azuread_user` | Azure AD user |
 | `mssql_azuread_service_principal` | Azure AD service principal |
