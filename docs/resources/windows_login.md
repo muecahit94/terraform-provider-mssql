@@ -39,7 +39,7 @@ resource "mssql_windows_login" "former" {
 - `name` - (Required) The Windows user or group, as `DOMAIN\name` (or `name@domain`). Changing this forces a new resource.
 - `default_database` - (Optional) The default database of the login. Defaults to the value SQL Server assigns (`master`). Can be changed in place.
 - `default_language` - (Optional) The default language of the login. Defaults to the value SQL Server assigns. Can be changed in place.
-- `is_disabled` - (Optional) Whether the login is disabled. Defaults to `false`. Can be changed in place.
+- `is_disabled` - (Optional) Whether the login is disabled. Defaults to `false`. SQL Server can only disable the login of a user, not of a Windows group. Can be changed in place.
 
 ## Attribute Reference
 

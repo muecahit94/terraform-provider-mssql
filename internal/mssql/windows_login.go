@@ -81,6 +81,8 @@ func (c *Client) CreateWindowsLogin(ctx context.Context, opts CreateWindowsLogin
 	}
 	if opts.Disabled {
 		if err := c.SetWindowsLoginDisabled(ctx, opts.Name, true); err != nil {
+			// Do not leave a half-created login behind: Terraform has no state for it.
+			_ = c.DropWindowsLogin(ctx, opts.Name)
 			return nil, err
 		}
 	}

@@ -87,7 +87,7 @@ func (r *WindowsLoginResource) Schema(ctx context.Context, req resource.SchemaRe
 				},
 			},
 			"is_disabled": schema.BoolAttribute{
-				Description: "Whether the login is disabled. Defaults to `false`.",
+				Description: "Whether the login is disabled. Defaults to `false`. SQL Server cannot disable the login of a Windows group, only of a user.",
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),
