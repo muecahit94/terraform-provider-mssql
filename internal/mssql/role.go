@@ -115,7 +115,7 @@ func (c *Client) ListDatabaseRoles(ctx context.Context, databaseName string) ([]
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -175,9 +175,9 @@ type CreateDatabaseRoleOptions struct {
 
 // CreateDatabaseRole creates a new database role.
 func (c *Client) CreateDatabaseRole(ctx context.Context, opts CreateDatabaseRoleOptions) (*DatabaseRole, error) {
-	query := fmt.Sprintf("CREATE ROLE [%s]", opts.RoleName)
+	query := "CREATE ROLE " + quoteName(opts.RoleName)
 	if opts.OwnerName != "" {
-		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
+		query += " AUTHORIZATION " + quoteName(opts.OwnerName)
 	}
 
 	// Try to get a direct connection to the database first (Azure SQL support)
@@ -216,7 +216,7 @@ type UpdateDatabaseRoleOptions struct {
 // UpdateDatabaseRole updates an existing database role.
 func (c *Client) UpdateDatabaseRole(ctx context.Context, opts UpdateDatabaseRoleOptions) (*DatabaseRole, error) {
 	if opts.NewOwnerName != nil {
-		query := fmt.Sprintf("ALTER AUTHORIZATION ON ROLE::[%s] TO [%s]", opts.RoleName, *opts.NewOwnerName)
+		query := "ALTER AUTHORIZATION ON ROLE::" + quoteName(opts.RoleName) + " TO " + quoteName(*opts.NewOwnerName)
 
 		// Try to get a direct connection to the database first (Azure SQL support)
 		db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
@@ -242,7 +242,7 @@ func (c *Client) UpdateDatabaseRole(ctx context.Context, opts UpdateDatabaseRole
 
 // DropDatabaseRole drops a database role.
 func (c *Client) DropDatabaseRole(ctx context.Context, databaseName, roleName string) error {
-	query := fmt.Sprintf("DROP ROLE IF EXISTS [%s]", roleName)
+	query := "DROP ROLE IF EXISTS " + quoteName(roleName)
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -324,7 +324,7 @@ func scanDatabaseRoleMember(row *sql.Row) (*DatabaseRoleMember, error) {
 
 // AddDatabaseRoleMember adds a member to a database role.
 func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
-	query := fmt.Sprintf("ALTER ROLE [%s] ADD MEMBER [%s]", roleName, memberName)
+	query := "ALTER ROLE " + quoteName(roleName) + " ADD MEMBER " + quoteName(memberName)
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -345,7 +345,7 @@ func (c *Client) AddDatabaseRoleMember(ctx context.Context, databaseName, roleNa
 
 // RemoveDatabaseRoleMember removes a member from a database role.
 func (c *Client) RemoveDatabaseRoleMember(ctx context.Context, databaseName, roleName, memberName string) error {
-	query := fmt.Sprintf("ALTER ROLE [%s] DROP MEMBER [%s]", roleName, memberName)
+	query := "ALTER ROLE " + quoteName(roleName) + " DROP MEMBER " + quoteName(memberName)
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -403,7 +403,7 @@ func (c *Client) GetUserRoles(ctx context.Context, databaseName, userName string
 	}
 	defer conn.Close()
 
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -534,9 +534,9 @@ type CreateServerRoleOptions struct {
 
 // CreateServerRole creates a new server role.
 func (c *Client) CreateServerRole(ctx context.Context, opts CreateServerRoleOptions) (*ServerRole, error) {
-	query := fmt.Sprintf("CREATE SERVER ROLE [%s]", opts.RoleName)
+	query := "CREATE SERVER ROLE " + quoteName(opts.RoleName)
 	if opts.OwnerName != "" {
-		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
+		query += " AUTHORIZATION " + quoteName(opts.OwnerName)
 	}
 
 	_, err := c.ExecContext(ctx, query)
@@ -549,7 +549,7 @@ func (c *Client) CreateServerRole(ctx context.Context, opts CreateServerRoleOpti
 
 // DropServerRole drops a server role.
 func (c *Client) DropServerRole(ctx context.Context, roleName string) error {
-	query := fmt.Sprintf("DROP SERVER ROLE [%s]", roleName)
+	query := "DROP SERVER ROLE " + quoteName(roleName)
 	_, err := c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop server role: %w", err)
@@ -599,7 +599,7 @@ func (c *Client) GetServerRoleMember(ctx context.Context, roleName, memberName s
 
 // AddServerRoleMember adds a member to a server role.
 func (c *Client) AddServerRoleMember(ctx context.Context, roleName, memberName string) error {
-	query := fmt.Sprintf("ALTER SERVER ROLE [%s] ADD MEMBER [%s]", roleName, memberName)
+	query := "ALTER SERVER ROLE " + quoteName(roleName) + " ADD MEMBER " + quoteName(memberName)
 	_, err := c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to add server role member: %w", err)
@@ -610,7 +610,7 @@ func (c *Client) AddServerRoleMember(ctx context.Context, roleName, memberName s
 
 // RemoveServerRoleMember removes a member from a server role.
 func (c *Client) RemoveServerRoleMember(ctx context.Context, roleName, memberName string) error {
-	query := fmt.Sprintf("ALTER SERVER ROLE [%s] DROP MEMBER [%s]", roleName, memberName)
+	query := "ALTER SERVER ROLE " + quoteName(roleName) + " DROP MEMBER " + quoteName(memberName)
 	_, err := c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to remove server role member: %w", err)

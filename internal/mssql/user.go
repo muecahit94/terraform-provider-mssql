@@ -179,7 +179,7 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -295,7 +295,7 @@ type UpdateSQLUserOptions struct {
 // UpdateSQLUser updates an existing SQL user.
 func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (*User, error) {
 	if opts.DefaultSchema != nil {
-		query := fmt.Sprintf("ALTER USER [%s] WITH DEFAULT_SCHEMA = [%s]", opts.UserName, *opts.DefaultSchema)
+		query := "ALTER USER " + quoteName(opts.UserName) + " WITH DEFAULT_SCHEMA = " + quoteName(*opts.DefaultSchema)
 
 		// Try to get a direct connection to the database first (Azure SQL support)
 		db, err := c.GetDatabaseConnection(ctx, opts.DatabaseName)
@@ -319,7 +319,7 @@ func (c *Client) UpdateSQLUser(ctx context.Context, opts UpdateSQLUserOptions) (
 
 // DropUser drops a user from a database.
 func (c *Client) DropUser(ctx context.Context, databaseName, userName string) error {
-	query := fmt.Sprintf("DROP USER IF EXISTS [%s]", userName)
+	query := "DROP USER IF EXISTS " + quoteName(userName)
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -371,17 +371,17 @@ func (c *Client) CreateAzureADUser(ctx context.Context, opts CreateAzureADUserOp
 		}
 
 		query = fmt.Sprintf(
-			"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
-			opts.UserName,
+			"CREATE USER %s WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = %s",
+			quoteName(opts.UserName),
 			sid,
-			defaultSchema,
+			quoteName(defaultSchema),
 		)
 	} else {
 		// For email-based users: use FROM EXTERNAL PROVIDER
 		query = fmt.Sprintf(
-			"CREATE USER [%s] FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = [%s]",
-			opts.UserName,
-			defaultSchema,
+			"CREATE USER %s FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = %s",
+			quoteName(opts.UserName),
+			quoteName(defaultSchema),
 		)
 	}
 
@@ -423,10 +423,10 @@ func (c *Client) CreateAzureADServicePrincipal(ctx context.Context, opts CreateA
 	}
 
 	query := fmt.Sprintf(
-		"CREATE USER [%s] WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = [%s]",
-		opts.Name,
+		"CREATE USER %s WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = %s",
+		quoteName(opts.Name),
 		sid,
-		defaultSchema,
+		quoteName(defaultSchema),
 	)
 
 	_, err = db.ExecContext(ctx, query)

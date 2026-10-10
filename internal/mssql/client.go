@@ -413,7 +413,7 @@ func (c *Client) QueryRowContext(ctx context.Context, query string, args ...inte
 
 // UseDatabase switches the connection to use the specified database.
 func (c *Client) UseDatabase(ctx context.Context, databaseName string) error {
-	_, err := c.db.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName))
+	_, err := c.db.ExecContext(ctx, "USE "+quoteName(databaseName))
 	return err
 }
 
@@ -428,7 +428,7 @@ func (c *Client) ExecInDatabaseContext(ctx context.Context, databaseName, query 
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -452,7 +452,7 @@ func (c *Client) QueryRowInDatabaseContext(ctx context.Context, databaseName, qu
 	// The connection will be returned to the pool when the row is scanned or closed
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}

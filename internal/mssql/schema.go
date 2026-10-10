@@ -95,7 +95,7 @@ func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -141,9 +141,9 @@ type CreateSchemaOptions struct {
 
 // CreateSchema creates a new schema.
 func (c *Client) CreateSchema(ctx context.Context, opts CreateSchemaOptions) (*Schema, error) {
-	query := fmt.Sprintf("CREATE SCHEMA [%s]", opts.SchemaName)
+	query := "CREATE SCHEMA " + quoteName(opts.SchemaName)
 	if opts.OwnerName != "" {
-		query += fmt.Sprintf(" AUTHORIZATION [%s]", opts.OwnerName)
+		query += " AUTHORIZATION " + quoteName(opts.OwnerName)
 	}
 
 	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
@@ -171,7 +171,7 @@ type UpdateSchemaOptions struct {
 // UpdateSchema updates an existing schema.
 func (c *Client) UpdateSchema(ctx context.Context, opts UpdateSchemaOptions) (*Schema, error) {
 	if opts.NewOwnerName != nil {
-		query := fmt.Sprintf("ALTER AUTHORIZATION ON SCHEMA::[%s] TO [%s]", opts.SchemaName, *opts.NewOwnerName)
+		query := "ALTER AUTHORIZATION ON SCHEMA::" + quoteName(opts.SchemaName) + " TO " + quoteName(*opts.NewOwnerName)
 		err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update schema owner: %w", err)
@@ -183,7 +183,7 @@ func (c *Client) UpdateSchema(ctx context.Context, opts UpdateSchemaOptions) (*S
 
 // DropSchema drops a schema.
 func (c *Client) DropSchema(ctx context.Context, databaseName, schemaName string) error {
-	query := fmt.Sprintf("DROP SCHEMA IF EXISTS [%s]", schemaName)
+	query := "DROP SCHEMA IF EXISTS " + quoteName(schemaName)
 	err := c.ExecInDatabaseContext(ctx, databaseName, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop schema: %w", err)

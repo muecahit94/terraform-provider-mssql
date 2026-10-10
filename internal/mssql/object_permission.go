@@ -27,9 +27,9 @@ type ObjectPermission struct {
 // of the statement text and cannot be passed as a parameter, so it is validated first.
 var permissionNamePattern = regexp.MustCompile(`^[A-Z]+( [A-Z]+)*$`)
 
-// NormalizeObjectPermission upper-cases a permission name and rejects anything that is not a
+// NormalizePermission upper-cases a permission name and rejects anything that is not a
 // plain permission keyword sequence.
-func NormalizeObjectPermission(permission string) (string, error) {
+func NormalizePermission(permission string) (string, error) {
 	normalized := strings.ToUpper(strings.TrimSpace(permission))
 	if !permissionNamePattern.MatchString(normalized) {
 		return "", fmt.Errorf("invalid permission %q: expected a permission name such as SELECT or VIEW DEFINITION", permission)
@@ -48,7 +48,7 @@ func objectSecurable(schemaName, objectName, columnName string) string {
 
 // GrantObjectPermissionStatement builds the GRANT statement of an object or column permission.
 func GrantObjectPermissionStatement(schemaName, objectName, columnName, principalName, permission string, withGrantOption bool) (string, error) {
-	permission, err := NormalizeObjectPermission(permission)
+	permission, err := NormalizePermission(permission)
 	if err != nil {
 		return "", err
 	}
@@ -62,7 +62,7 @@ func GrantObjectPermissionStatement(schemaName, objectName, columnName, principa
 // RevokeObjectPermissionStatement builds the REVOKE statement of an object or column permission.
 // CASCADE also revokes what the principal granted on to others.
 func RevokeObjectPermissionStatement(schemaName, objectName, columnName, principalName, permission string) (string, error) {
-	permission, err := NormalizeObjectPermission(permission)
+	permission, err := NormalizePermission(permission)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +99,7 @@ func objectPermissionQuery(database string) string {
 // GetObjectPermission retrieves one permission, or nil when it does not exist. A DENY is returned
 // with State "D": the caller decides what to do with it, because granting over a DENY removes it.
 func (c *Client) GetObjectPermission(ctx context.Context, database, schemaName, objectName, columnName, principalName, permission string) (*ObjectPermission, error) {
-	permission, err := NormalizeObjectPermission(permission)
+	permission, err := NormalizePermission(permission)
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,7 @@ package mssql
 
 import "testing"
 
-func TestNormalizeObjectPermission(t *testing.T) {
+func TestNormalizePermission(t *testing.T) {
 	valid := map[string]string{
 		"SELECT":           "SELECT",
 		"select":           "SELECT",
@@ -14,14 +14,14 @@ func TestNormalizeObjectPermission(t *testing.T) {
 		"EXECUTE":          "EXECUTE",
 	}
 	for in, want := range valid {
-		got, err := NormalizeObjectPermission(in)
+		got, err := NormalizePermission(in)
 		if err != nil || got != want {
-			t.Errorf("NormalizeObjectPermission(%q) = %q, %v; want %q", in, got, err, want)
+			t.Errorf("NormalizePermission(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{"", "SELECT; DROP TABLE x", "SELECT,INSERT", "SELECT (a)", "SELECT--", "1SELECT", "SELECT  INSERT"} {
-		if got, err := NormalizeObjectPermission(in); err == nil {
-			t.Errorf("NormalizeObjectPermission(%q) = %q, want an error", in, got)
+		if got, err := NormalizePermission(in); err == nil {
+			t.Errorf("NormalizePermission(%q) = %q, want an error", in, got)
 		}
 	}
 }

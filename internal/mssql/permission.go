@@ -117,7 +117,7 @@ func (c *Client) ListDatabasePermissions(ctx context.Context, databaseName, prin
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -152,7 +152,11 @@ func scanDatabasePermissionsRows(rows *sql.Rows) ([]DatabasePermission, error) {
 
 // GrantDatabasePermission grants a database-level permission.
 func (c *Client) GrantDatabasePermission(ctx context.Context, databaseName, principalName, permission string, withGrantOption bool) error {
-	query := fmt.Sprintf("GRANT %s TO [%s]", strings.ToUpper(permission), principalName)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "GRANT " + permission + " TO " + quoteName(principalName)
 	if withGrantOption {
 		query += " WITH GRANT OPTION"
 	}
@@ -176,7 +180,11 @@ func (c *Client) GrantDatabasePermission(ctx context.Context, databaseName, prin
 
 // RevokeDatabasePermission revokes a database-level permission.
 func (c *Client) RevokeDatabasePermission(ctx context.Context, databaseName, principalName, permission string) error {
-	query := fmt.Sprintf("REVOKE %s FROM [%s]", strings.ToUpper(permission), principalName)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "REVOKE " + permission + " FROM " + quoteName(principalName)
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -393,7 +401,7 @@ func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schema
 	defer conn.Close()
 
 	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 		return nil, fmt.Errorf("failed to switch database context: %w", err)
 	}
 
@@ -408,7 +416,11 @@ func (c *Client) ListSchemaPermissions(ctx context.Context, databaseName, schema
 
 // GrantSchemaPermission grants a schema-level permission.
 func (c *Client) GrantSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string, withGrantOption bool) error {
-	query := fmt.Sprintf("GRANT %s ON SCHEMA::[%s] TO [%s]", strings.ToUpper(permission), schemaName, principalName)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "GRANT " + permission + " ON SCHEMA::" + quoteName(schemaName) + " TO " + quoteName(principalName)
 	if withGrantOption {
 		query += " WITH GRANT OPTION"
 	}
@@ -433,7 +445,11 @@ func (c *Client) GrantSchemaPermission(ctx context.Context, databaseName, schema
 // RevokeSchemaPermission revokes a schema-level permission.
 // CASCADE is used to also revoke any permissions that were granted by this principal.
 func (c *Client) RevokeSchemaPermission(ctx context.Context, databaseName, schemaName, principalName, permission string) error {
-	query := fmt.Sprintf("REVOKE %s ON SCHEMA::[%s] FROM [%s] CASCADE", strings.ToUpper(permission), schemaName, principalName)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "REVOKE " + permission + " ON SCHEMA::" + quoteName(schemaName) + " FROM " + quoteName(principalName) + " CASCADE"
 
 	// Try to get a direct connection to the database first (Azure SQL support)
 	db, err := c.GetDatabaseConnection(ctx, databaseName)
@@ -555,12 +571,16 @@ func (c *Client) ListServerPermissions(ctx context.Context, principalName string
 
 // GrantServerPermission grants a server-level permission.
 func (c *Client) GrantServerPermission(ctx context.Context, principalName, permission string, withGrantOption bool) error {
-	query := fmt.Sprintf("GRANT %s TO [%s]", strings.ToUpper(permission), principalName)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "GRANT " + permission + " TO " + quoteName(principalName)
 	if withGrantOption {
 		query += " WITH GRANT OPTION"
 	}
 
-	_, err := c.ExecContext(ctx, query)
+	_, err = c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to grant server permission: %w", err)
 	}
@@ -570,8 +590,12 @@ func (c *Client) GrantServerPermission(ctx context.Context, principalName, permi
 
 // RevokeServerPermission revokes a server-level permission.
 func (c *Client) RevokeServerPermission(ctx context.Context, principalName, permission string) error {
-	query := fmt.Sprintf("REVOKE %s FROM [%s]", strings.ToUpper(permission), principalName)
-	_, err := c.ExecContext(ctx, query)
+	permission, err := NormalizePermission(permission)
+	if err != nil {
+		return err
+	}
+	query := "REVOKE " + permission + " FROM " + quoteName(principalName)
+	_, err = c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to revoke server permission: %w", err)
 	}

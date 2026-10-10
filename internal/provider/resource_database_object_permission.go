@@ -131,7 +131,7 @@ func (r *DatabaseObjectPermissionResource) ValidateConfig(ctx context.Context, r
 	if resp.Diagnostics.HasError() || data.Permission.IsNull() || data.Permission.IsUnknown() {
 		return
 	}
-	if _, err := mssql.NormalizeObjectPermission(data.Permission.ValueString()); err != nil {
+	if _, err := mssql.NormalizePermission(data.Permission.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("permission"), "Invalid permission", err.Error())
 		return
 	}

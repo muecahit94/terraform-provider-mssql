@@ -43,6 +43,11 @@ func quoteName(name string) string {
 	return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
 }
 
+// quoteString quotes a Unicode string literal, doubling any single quote.
+func quoteString(s string) string {
+	return "N'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
 const databaseSelect = `
 	SELECT
 		database_id,

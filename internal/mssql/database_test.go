@@ -3,7 +3,10 @@
 
 package mssql
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestQuoteName(t *testing.T) {
 	tests := []struct{ in, want string }{
@@ -15,6 +18,40 @@ func TestQuoteName(t *testing.T) {
 	for _, tt := range tests {
 		if got := quoteName(tt.in); got != tt.want {
 			t.Errorf("quoteName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestQuoteString(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"P@ssw0rd123!", "N'P@ssw0rd123!'"},
+		{"", "N''"},
+		{"it's", "N'it''s'"},
+		{"x', CHECK_POLICY = OFF; DROP LOGIN sa; --", "N'x'', CHECK_POLICY = OFF; DROP LOGIN sa; --'"},
+		{"ünïcødé", "N'ünïcødé'"},
+	}
+	for _, tt := range tests {
+		if got := quoteString(tt.in); got != tt.want {
+			t.Errorf("quoteString(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestPermissionStatementsRejectInjectedPermissions(t *testing.T) {
+	c := &Client{}
+	ctx := context.Background()
+	const injected = "SELECT TO public; DROP TABLE t; --"
+	checks := map[string]error{
+		"GrantDatabasePermission":  c.GrantDatabasePermission(ctx, "db", "u", injected, false),
+		"RevokeDatabasePermission": c.RevokeDatabasePermission(ctx, "db", "u", injected),
+		"GrantSchemaPermission":    c.GrantSchemaPermission(ctx, "db", "s", "u", injected, false),
+		"RevokeSchemaPermission":   c.RevokeSchemaPermission(ctx, "db", "s", "u", injected),
+		"GrantServerPermission":    c.GrantServerPermission(ctx, "u", injected, false),
+		"RevokeServerPermission":   c.RevokeServerPermission(ctx, "u", injected),
+	}
+	for name, err := range checks {
+		if err == nil {
+			t.Errorf("%s must reject %q before reaching the server", name, injected)
 		}
 	}
 }

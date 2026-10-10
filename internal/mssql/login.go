@@ -195,13 +195,13 @@ func (c *Client) CreateSQLLogin(ctx context.Context, opts CreateSQLLoginOptions)
 	}
 
 	query := fmt.Sprintf(`
-		CREATE LOGIN [%s] WITH PASSWORD = '%s',
-		DEFAULT_DATABASE = [%s],
+		CREATE LOGIN %s WITH PASSWORD = %s,
+		DEFAULT_DATABASE = %s,
 		CHECK_EXPIRATION = %s,
 		CHECK_POLICY = %s`,
-		opts.Name,
-		opts.Password,
-		defaultDB,
+		quoteName(opts.Name),
+		quoteString(opts.Password),
+		quoteName(defaultDB),
 		boolToOnOff(opts.CheckExpirationEnabled),
 		boolToOnOff(opts.CheckPolicyEnabled),
 	)
@@ -215,7 +215,7 @@ func (c *Client) CreateSQLLogin(ctx context.Context, opts CreateSQLLoginOptions)
 	}
 
 	if opts.DefaultLanguage != "" {
-		query += fmt.Sprintf(", DEFAULT_LANGUAGE = [%s]", opts.DefaultLanguage)
+		query += ", DEFAULT_LANGUAGE = " + quoteName(opts.DefaultLanguage)
 	}
 
 	_, err := c.ExecContext(ctx, query)
@@ -240,7 +240,7 @@ type UpdateSQLLoginOptions struct {
 // UpdateSQLLogin updates an existing SQL login.
 func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions) (*SQLLogin, error) {
 	if opts.Password != nil {
-		query := fmt.Sprintf("ALTER LOGIN [%s] WITH PASSWORD = '%s'", opts.Name, *opts.Password)
+		query := "ALTER LOGIN " + quoteName(opts.Name) + " WITH PASSWORD = " + quoteString(*opts.Password)
 		if _, err := c.ExecContext(ctx, query); err != nil {
 			return nil, fmt.Errorf("failed to update SQL login password: %w", err)
 		}
@@ -249,10 +249,10 @@ func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions)
 	var alterParts []string
 
 	if opts.DefaultDatabase != nil {
-		alterParts = append(alterParts, fmt.Sprintf("DEFAULT_DATABASE = [%s]", *opts.DefaultDatabase))
+		alterParts = append(alterParts, "DEFAULT_DATABASE = "+quoteName(*opts.DefaultDatabase))
 	}
 	if opts.DefaultLanguage != nil {
-		alterParts = append(alterParts, fmt.Sprintf("DEFAULT_LANGUAGE = [%s]", *opts.DefaultLanguage))
+		alterParts = append(alterParts, "DEFAULT_LANGUAGE = "+quoteName(*opts.DefaultLanguage))
 	}
 	if opts.CheckExpirationEnabled != nil {
 		alterParts = append(alterParts, fmt.Sprintf("CHECK_EXPIRATION = %s", boolToOnOff(*opts.CheckExpirationEnabled)))
@@ -262,7 +262,7 @@ func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions)
 	}
 
 	if len(alterParts) > 0 {
-		query := fmt.Sprintf("ALTER LOGIN [%s] WITH ", opts.Name)
+		query := "ALTER LOGIN " + quoteName(opts.Name) + " WITH "
 		for i, part := range alterParts {
 			if i > 0 {
 				query += ", "
@@ -277,9 +277,9 @@ func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions)
 	if opts.IsDisabled != nil {
 		var query string
 		if *opts.IsDisabled {
-			query = fmt.Sprintf("ALTER LOGIN [%s] DISABLE", opts.Name)
+			query = "ALTER LOGIN " + quoteName(opts.Name) + " DISABLE"
 		} else {
-			query = fmt.Sprintf("ALTER LOGIN [%s] ENABLE", opts.Name)
+			query = "ALTER LOGIN " + quoteName(opts.Name) + " ENABLE"
 		}
 		if _, err := c.ExecContext(ctx, query); err != nil {
 			return nil, fmt.Errorf("failed to update SQL login disabled state: %w", err)
@@ -291,7 +291,7 @@ func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions)
 
 // DropSQLLogin drops a SQL login.
 func (c *Client) DropSQLLogin(ctx context.Context, name string) error {
-	query := fmt.Sprintf("DROP LOGIN [%s]", name)
+	query := "DROP LOGIN " + quoteName(name)
 	_, err := c.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop SQL login: %w", err)

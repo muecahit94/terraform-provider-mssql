@@ -41,7 +41,7 @@ func (c *Client) ExecuteScript(ctx context.Context, databaseName, script string)
 	defer conn.Close()
 
 	if databaseName != "" {
-		if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 			return nil, fmt.Errorf("failed to switch database context: %w", err)
 		}
 	}
@@ -101,7 +101,7 @@ func (c *Client) ExecuteScriptNoResult(ctx context.Context, databaseName, script
 	defer conn.Close()
 
 	if databaseName != "" {
-		if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE [%s]", databaseName)); err != nil {
+		if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
 			return fmt.Errorf("failed to switch database context: %w", err)
 		}
 	}
