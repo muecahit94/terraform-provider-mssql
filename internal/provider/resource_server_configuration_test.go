@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
@@ -42,5 +43,11 @@ func TestApplyServerConfiguration(t *testing.T) {
 	}
 	if !data.RestartRequired.ValueBool() {
 		t.Error("a configured value that is not in use, for an option that is not dynamic, needs a restart")
+	}
+
+	configured := ServerConfigurationResourceModel{Name: types.StringValue("Max Degree Of Parallelism")}
+	applyServerConfiguration(&configured, &mssql.ServerConfiguration{Name: "max degree of parallelism", IsDynamic: true})
+	if got := configured.Name.ValueString(); got != "Max Degree Of Parallelism" {
+		t.Errorf("name = %q, want the configured spelling (otherwise every plan replaces the resource)", got)
 	}
 }

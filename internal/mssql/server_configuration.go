@@ -7,10 +7,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 )
 
 // showAdvancedOptions is the option that makes the advanced options visible to sp_configure.
 const showAdvancedOptions = "show advanced options"
+
+// serverConfigurationMu serializes option changes: "show advanced options" is server-wide state that a
+// change switches on and off again, so parallel changes would switch it off under each other.
+var serverConfigurationMu sync.Mutex
 
 // ServerConfiguration is one row of sys.configurations (the options of sp_configure).
 type ServerConfiguration struct {
@@ -89,6 +94,9 @@ func planConfigurationChange(cfg ServerConfiguration, value int64, showAdvancedI
 
 // SetServerConfiguration sets an option of sp_configure and applies it with RECONFIGURE.
 func (c *Client) SetServerConfiguration(ctx context.Context, name string, value int64) error {
+	serverConfigurationMu.Lock()
+	defer serverConfigurationMu.Unlock()
+
 	cfg, err := c.GetServerConfiguration(ctx, name)
 	if err != nil {
 		return err

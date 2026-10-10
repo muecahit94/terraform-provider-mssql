@@ -11,7 +11,9 @@ Manages one server configuration option, the ones `sp_configure` lists and `sys.
 `max server memory (MB)`, `max degree of parallelism`, `clr enabled` or `xp_cmdshell`.
 
 The change is applied with `sp_configure` and `RECONFIGURE`. An **advanced** option can only be changed while
-`show advanced options` is on, so when it is off the provider switches it on for the change and off again.
+`show advanced options` is on, so when it is off the provider switches it on for the change and off again. Because that
+switch is server-wide, the provider applies option changes one at a time, also when Terraform runs resources in parallel.
+Another tool that changes `show advanced options` at the same moment can still interfere.
 
 ## Example Usage
 

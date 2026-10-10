@@ -101,7 +101,8 @@ func (r *ServerConfigurationResource) Configure(ctx context.Context, req resourc
 // applyServerConfiguration copies the values read from the server into the model.
 func applyServerConfiguration(data *ServerConfigurationResourceModel, cfg *mssql.ServerConfiguration) {
 	data.ID = types.StringValue(cfg.Name)
-	data.Name = types.StringValue(cfg.Name)
+	// sys.configurations matches names case-insensitively; keep the configured spelling to avoid a replacement.
+	data.Name = keepCase(data.Name, cfg.Name)
 	data.Value = types.Int64Value(cfg.Value)
 	data.ValueInUse = types.Int64Value(cfg.ValueInUse)
 	data.RestartRequired = types.BoolValue(cfg.RestartRequired())
