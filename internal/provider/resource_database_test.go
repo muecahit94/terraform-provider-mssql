@@ -25,7 +25,7 @@ func TestDatabaseResourceSchema(t *testing.T) {
 	if diags := resp.Schema.ValidateImplementation(ctx); diags.HasError() {
 		t.Errorf("ValidateImplementation() returned errors: %v", diags.Errors())
 	}
-	for _, name := range []string{"collation", "compatibility_level", "recovery_model"} {
+	for _, name := range []string{"collation", "compatibility_level", "recovery_model", "owner_name"} {
 		attr, ok := resp.Schema.Attributes[name]
 		if !ok {
 			t.Fatalf("attribute %q is missing", name)

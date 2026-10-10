@@ -44,6 +44,7 @@ type DatabaseResourceModel struct {
 	Collation          types.String `tfsdk:"collation"`
 	CompatibilityLevel types.Int64  `tfsdk:"compatibility_level"`
 	RecoveryModel      types.String `tfsdk:"recovery_model"`
+	OwnerName          types.String `tfsdk:"owner_name"`
 }
 
 // keepCase returns the configured value when it only differs from the server value by case.
@@ -63,6 +64,7 @@ func applyDatabase(data *DatabaseResourceModel, db *mssql.Database) {
 	data.Collation = keepCase(data.Collation, db.Collation)
 	data.CompatibilityLevel = types.Int64Value(int64(db.CompatibilityLevel))
 	data.RecoveryModel = types.StringValue(db.RecoveryModel)
+	data.OwnerName = keepCase(data.OwnerName, db.Owner)
 }
 
 // Metadata returns the resource type name.
@@ -114,6 +116,16 @@ func (r *DatabaseResource) Schema(ctx context.Context, req resource.SchemaReques
 				Description: "The recovery model of the database: `FULL`, `SIMPLE` or `BULK_LOGGED`. " +
 					"Defaults to the model of the server's `model` database. Can be changed in place. " +
 					"Switching to `FULL` or `BULK_LOGGED` does not start the log backup chain until a full backup is taken.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"owner_name": schema.StringAttribute{
+				Description: "The login that owns the database (`ALTER AUTHORIZATION ON DATABASE`). " +
+					"Defaults to the login that creates the database. Can be changed in place. " +
+					"It is empty when the owner login no longer exists.",
 				Optional: true,
 				Computed: true,
 				PlanModifiers: []planmodifier.String{
@@ -216,6 +228,7 @@ func (r *DatabaseResource) Create(ctx context.Context, req resource.CreateReques
 		Collation:          data.Collation.ValueString(),
 		CompatibilityLevel: int(data.CompatibilityLevel.ValueInt64()),
 		RecoveryModel:      data.RecoveryModel.ValueString(),
+		Owner:              data.OwnerName.ValueString(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create database", err.Error())
@@ -303,6 +316,13 @@ func (r *DatabaseResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
+	if !plan.OwnerName.IsUnknown() && !strings.EqualFold(plan.OwnerName.ValueString(), state.OwnerName.ValueString()) {
+		if err := r.client.SetDatabaseOwner(ctx, name, plan.OwnerName.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Failed to update database", err.Error())
+			return
+		}
+	}
+
 	db, err := r.client.GetDatabase(ctx, name)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read database", err.Error())
@@ -360,4 +380,5 @@ func (r *DatabaseResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("collation"), db.Collation)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), int64(db.CompatibilityLevel))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), db.RecoveryModel)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("owner_name"), db.Owner)...)
 }

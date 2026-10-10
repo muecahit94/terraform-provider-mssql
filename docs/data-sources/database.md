@@ -31,3 +31,4 @@ output "database_id" {
 - `collation` - The collation of the database.
 - `compatibility_level` - The compatibility level of the database, for example `160`.
 - `recovery_model` - The recovery model: `FULL`, `SIMPLE` or `BULK_LOGGED`.
+- `owner_name` - The login that owns the database; empty when the owner login no longer exists.
