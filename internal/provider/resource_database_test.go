@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
 func TestDatabaseResourceSchema(t *testing.T) {
@@ -181,5 +182,27 @@ func TestDatabaseDeletionProtectionSchema(t *testing.T) {
 	// It defaults to false, so existing configurations do not change.
 	if !attr.IsOptional() || !attr.IsComputed() {
 		t.Error("deletion_protection must be Optional and Computed (with a default)")
+	}
+}
+
+func TestApplyDatabaseKeepsKnownCollation(t *testing.T) {
+	// A database that cannot be opened reports no collation: what the state knows stays.
+	data := DatabaseResourceModel{Collation: types.StringValue("Ukrainian_CI_AS")}
+	applyDatabase(&data, &mssql.Database{ID: 7, Name: "db", Collation: "", CompatibilityLevel: 150, RecoveryModel: "SIMPLE"})
+	if got := data.Collation.ValueString(); got != "Ukrainian_CI_AS" {
+		t.Errorf("collation = %q, want the known value to be kept", got)
+	}
+
+	// A reported collation always wins.
+	applyDatabase(&data, &mssql.Database{ID: 7, Name: "db", Collation: "Latin1_General_CI_AS", CompatibilityLevel: 150, RecoveryModel: "SIMPLE"})
+	if got := data.Collation.ValueString(); got != "Latin1_General_CI_AS" {
+		t.Errorf("collation = %q, want the reported one", got)
+	}
+
+	// Nothing known and nothing reported: an empty value, not a crash.
+	var fresh DatabaseResourceModel
+	applyDatabase(&fresh, &mssql.Database{ID: 7, Name: "db"})
+	if fresh.Collation.IsNull() || fresh.Collation.IsUnknown() {
+		t.Error("an empty collation must still be a known value")
 	}
 }
