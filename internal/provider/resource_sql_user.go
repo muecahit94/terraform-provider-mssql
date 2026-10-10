@@ -71,8 +71,10 @@ func (r *SQLUserResource) Schema(ctx context.Context, req resource.SchemaRequest
 				},
 			},
 			"login_name": schema.StringAttribute{
-				Description: "The name of the login to map this user to.",
-				Required:    true,
+				Description: "The name of the login to map this user to. Omit it for a user without a login " +
+					"(`CREATE USER ... WITHOUT LOGIN`), which is also how users that lost their login after a " +
+					"database restore (orphaned users) are represented. Changing this forces a new resource.",
+				Optional: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -192,7 +194,7 @@ func (r *SQLUserResource) Read(ctx context.Context, req resource.ReadRequest, re
 	// Update state with current values (including potentially changed ID)
 	data.ID = types.StringValue(fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))
 	data.DefaultSchema = types.StringValue(user.DefaultSchemaName)
-	data.LoginName = types.StringValue(user.LoginName)
+	data.LoginName = loginNameValue(user.LoginName)
 
 	// Read user's roles
 	roles, err := r.client.GetUserRoles(ctx, data.DatabaseName.ValueString(), data.Name.ValueString())
@@ -342,6 +344,15 @@ func (r *SQLUserResource) ImportState(ctx context.Context, req resource.ImportSt
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%d/%d", user.DatabaseID, user.PrincipalID))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database_name"), databaseName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), user.Name)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("login_name"), user.LoginName)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("login_name"), loginNameValue(user.LoginName))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_schema"), user.DefaultSchemaName)...)
+}
+
+// loginNameValue maps the empty login of a user without a (matching) login to null, so that a
+// configuration that omits login_name shows no diff.
+func loginNameValue(login string) types.String {
+	if login == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(login)
 }

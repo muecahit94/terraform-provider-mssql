@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+// userPrincipalTypes are the sys.database_principals types managed as users:
+// S = SQL user, U = Windows user, G = Windows group, E = Entra ID user,
+// X = Entra ID group.
+const userPrincipalTypes = "'S', 'U', 'G', 'E', 'X'"
+
 // guidToSID converts an Azure AD Object ID (GUID) to the binary SID format required by SQL Server.
 // For example: "cbb9c7db-2777-47b7-8954-0269ae3dc553" -> "0xDBC7B9CB7727B74789540269AE3DC553"
 func guidToSID(guid string) (string, error) {
@@ -74,7 +79,7 @@ func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*U
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
+		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
 
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, userName)
 	if err != nil {
@@ -95,7 +100,7 @@ func (c *Client) getUserWithDB(ctx context.Context, db *sql.DB, userName string)
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
+		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
 
 	row := db.QueryRowContext(ctx, query, userName)
 	return scanUser(row)
@@ -132,7 +137,7 @@ func (c *Client) GetUserByID(ctx context.Context, databaseName string, principal
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.principal_id = @p1 AND dp.type IN ('S', 'U', 'E', 'X')` // X = EXTERNAL_GROUP
+		WHERE dp.principal_id = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
 
 	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
 	if err != nil {
@@ -182,7 +187,7 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 			ISNULL(sp.name, '')
 		FROM sys.database_principals dp
 		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.type IN ('S', 'U', 'E', 'X') // X = EXTERNAL_GROUP
+		WHERE dp.type IN (` + userPrincipalTypes + `)
 		ORDER BY dp.name`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -210,6 +215,18 @@ func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, er
 	return users, rows.Err()
 }
 
+// createUserStatement builds CREATE USER. An empty login creates a user without a login
+// (it cannot be used to connect, but can own permissions and be impersonated).
+func createUserStatement(userName, loginName, defaultSchema string) string {
+	query := "CREATE USER " + quoteName(userName)
+	if loginName == "" {
+		query += " WITHOUT LOGIN"
+	} else {
+		query += " FOR LOGIN " + quoteName(loginName)
+	}
+	return query + " WITH DEFAULT_SCHEMA = " + quoteName(defaultSchema)
+}
+
 // CreateSQLUserOptions contains options for creating a SQL user.
 type CreateSQLUserOptions struct {
 	DatabaseName  string
@@ -225,12 +242,7 @@ func (c *Client) CreateSQLUser(ctx context.Context, opts CreateSQLUserOptions) (
 		defaultSchema = "dbo"
 	}
 
-	query := fmt.Sprintf(
-		"CREATE USER [%s] FOR LOGIN [%s] WITH DEFAULT_SCHEMA = [%s]",
-		opts.UserName,
-		opts.LoginName,
-		defaultSchema,
-	)
+	query := createUserStatement(opts.UserName, opts.LoginName, defaultSchema)
 
 	err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query)
 	if err != nil {

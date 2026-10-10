@@ -7,7 +7,8 @@ description: |-
 
 # mssql_sql_user (Resource)
 
-Manages a database user that is mapped to a SQL Server login.
+Manages a database user. It is usually mapped to a SQL Server login, which can be a SQL login, a Windows user or a
+Windows group; a user can also have no login.
 
 ## Example Usage
 
@@ -30,11 +31,38 @@ resource "mssql_sql_user" "example" {
 }
 ```
 
+### Windows Group
+
+A login created for a Windows or Active Directory group gives a user of type `WINDOWS_GROUP`, which is read like any
+other user:
+
+```hcl
+resource "mssql_sql_user" "admins" {
+  database_name = mssql_database.example.name
+  name          = "CORP\\db-admins"
+  login_name    = "CORP\\db-admins"
+  roles         = ["db_owner"]
+}
+```
+
+### User Without a Login
+
+```hcl
+resource "mssql_sql_user" "no_login" {
+  database_name = mssql_database.example.name
+  name          = "impersonation_only"
+}
+```
+
+Omitting `login_name` creates the user with `CREATE USER ... WITHOUT LOGIN`. This is also how a user whose login is gone
+is represented, for example after a database was restored on another server (an orphaned user, whose SID matches no
+login): it can be imported, and a configuration that omits `login_name` shows no diff.
+
 ## Argument Reference
 
 - `database_name` - (Required) The name of the database. Changing this forces a new resource.
 - `name` - (Required) The name of the user. Changing this forces a new resource.
-- `login_name` - (Required) The name of the login to map this user to. Changing this forces a new resource.
+- `login_name` - (Optional) The name of the login to map this user to. Omit it for a user without a login (`WITHOUT LOGIN`) or an orphaned user. Changing this forces a new resource.
 - `default_schema` - (Optional) The default schema for the user. Defaults to `dbo`.
 - `roles` - (Optional) Set of database roles to assign to this user.
 
@@ -42,6 +70,7 @@ resource "mssql_sql_user" "example" {
 
 - `id` - The user ID in format `database_id/principal_id`.
 - `default_schema` - The default schema for the user.
+- `login_name` - The login the user is mapped to, or `null` when no login matches the SID of the user.
 - `roles` - The set of database roles assigned to this user.
 
 ## Import
