@@ -63,8 +63,9 @@ func (r *ServerConfigurationResource) Schema(ctx context.Context, req resource.S
 				},
 			},
 			"value": schema.Int64Attribute{
-				Description: "The value of the option. It is checked against the range the server reports for the option.",
-				Required:    true,
+				Description: "The value of the option. It is checked against the range the server reports for the option, " +
+					"except 0, which several options (such as `max worker threads`) use for automatic and which is left to SQL Server to check.",
+				Required: true,
 			},
 			"previous_value": schema.Int64Attribute{
 				Description: "The value the option had when this resource took it over. It is restored when the resource is destroyed. " +

@@ -70,6 +70,16 @@ func TestPlanConfigurationChange(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("0 means automatic and is allowed below the reported minimum", func(t *testing.T) {
+		workers := ServerConfiguration{Name: "max worker threads", Minimum: 128, Maximum: 65535, IsDynamic: true, IsAdvanced: true}
+		if _, err := planConfigurationChange(workers, 0, true); err != nil {
+			t.Errorf("restoring the default 0 of %q must be possible: %v", workers.Name, err)
+		}
+		if _, err := planConfigurationChange(workers, 64, true); err == nil {
+			t.Error("a non-zero value below the minimum must still be rejected")
+		}
+	})
 }
 
 func TestRestartRequired(t *testing.T) {

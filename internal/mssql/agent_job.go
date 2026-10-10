@@ -281,7 +281,7 @@ func replaceAgentJobSteps(ctx context.Context, db sqlRunner, jobName string, ste
 }
 
 // replaceAgentJobSchedules replaces all schedules of a job with the given ones. Schedules are detached by
-// ID: schedule names are not unique on a server, so detaching by name can hit another job's schedule.
+// ID: a job created outside Terraform can have two schedules with the same name, which detaching by name rejects.
 func replaceAgentJobSchedules(ctx context.Context, db sqlRunner, jobName string, schedules []AgentJobSchedule) error {
 	current, err := getAgentJob(ctx, db, jobName)
 	if err != nil {

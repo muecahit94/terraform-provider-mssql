@@ -74,9 +74,11 @@ const (
 // planConfigurationChange returns the statements that set an option. An advanced option can only be
 // changed while "show advanced options" is on, so when it is off it is switched on for the change and
 // switched off again afterwards; the option the caller asked for is never "show advanced options" itself
-// in that case. It validates the value against the range the server reports.
+// in that case. It validates the value against the range the server reports, except 0: options such as
+// "max worker threads", "locks" and "index create memory (KB)" use 0 for "automatic" (their default) although
+// their reported minimum is higher, so 0 is left to sp_configure to accept or reject.
 func planConfigurationChange(cfg ServerConfiguration, value int64, showAdvancedInUse bool) ([]configurationStep, error) {
-	if value < cfg.Minimum || value > cfg.Maximum {
+	if value != 0 && (value < cfg.Minimum || value > cfg.Maximum) {
 		return nil, fmt.Errorf("the value %d is out of the range of %q: %d to %d", value, cfg.Name, cfg.Minimum, cfg.Maximum)
 	}
 

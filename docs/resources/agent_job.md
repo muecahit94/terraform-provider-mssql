@@ -89,7 +89,7 @@ resource "mssql_agent_job" "nightly_import" {
 
 - Creating a job and changing it run in one transaction: when a step or schedule is rejected, nothing is changed.
 - Deleting the resource deletes the job and the schedules only it used.
-- Schedules shared with other jobs are read like any other schedule, but replacing the schedules of a job detaches them (and deletes them only when no other job uses them). Schedules are detached by ID, so another schedule with the same name is not touched.
+- Schedules shared with other jobs are read like any other schedule, but replacing the schedules of a job detaches them (and deletes them only when no other job uses them). Schedules are detached by ID, which also works for an imported job that has two schedules with the same name.
 - Alerts, operator notifications, proxies and job server targets other than the local server are not managed.
 
 ## Security

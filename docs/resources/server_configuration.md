@@ -34,7 +34,7 @@ resource "mssql_server_configuration" "xp_cmdshell" {
 ## Argument Reference
 
 - `name` - (Required) The option, spelled as in `sys.configurations` (for example `max degree of parallelism`). Changing this forces a new resource.
-- `value` - (Required) The value. It is checked against the minimum and maximum the server reports for the option before anything runs.
+- `value` - (Required) The value. It is checked against the minimum and maximum the server reports for the option before anything runs, except `0`: options such as `max worker threads`, `locks` and `index create memory (KB)` use `0` for automatic (their default) although the minimum they report is higher, so `0` is left to SQL Server to accept or reject.
 
 ## Attribute Reference
 
