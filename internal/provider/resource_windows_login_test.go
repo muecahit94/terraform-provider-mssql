@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
@@ -49,5 +52,55 @@ func TestApplyWindowsLogin(t *testing.T) {
 	// An empty language is a known value, so that a configuration without it shows no diff.
 	if data.DefaultLanguage.IsNull() || data.DefaultLanguage.IsUnknown() {
 		t.Error("an empty default language must be a known value")
+	}
+}
+
+func TestApplyWindowsLoginKeepsConfiguredCase(t *testing.T) {
+	data := WindowsLoginResourceModel{Name: types.StringValue(`corp\Alice`)}
+	applyWindowsLogin(&data, &mssql.WindowsLogin{PrincipalID: 1, Name: `CORP\alice`, Type: "WINDOWS_LOGIN", DefaultDatabase: "master"})
+	if got := data.Name.ValueString(); got != `corp\Alice` {
+		t.Errorf("name = %q, want the configured spelling (otherwise every plan replaces the login)", got)
+	}
+
+	data = WindowsLoginResourceModel{Name: types.StringValue(`CORP\old`)}
+	applyWindowsLogin(&data, &mssql.WindowsLogin{PrincipalID: 1, Name: `CORP\new`})
+	if got := data.Name.ValueString(); got != `CORP\new` {
+		t.Errorf("name = %q, a different name must come from the server", got)
+	}
+}
+
+func TestWindowsLoginValidateConfig(t *testing.T) {
+	ctx := context.Background()
+	schemaResp := &fwresource.SchemaResponse{}
+	r := NewWindowsLoginResource()
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+
+	tests := []struct {
+		name      string
+		value     interface{}
+		wantError bool
+	}{
+		{"domain user", `CORP\alice`, false},
+		{"local machine group", `BUILTIN\Administrators`, false},
+		{"name with spaces", `CORP\db admins`, false},
+		{"UPN", "alice@corp.example", true},
+		{"no domain", "alice", true},
+		{"two backslashes", `CORP\sub\alice`, true},
+		{"empty user part", `CORP\`, true},
+		{"unknown", tftypes.UnknownValue, false},
+	}
+	for _, tt := range tests {
+		values := map[string]tftypes.Value{}
+		for n, typ := range objType.AttributeTypes {
+			values[n] = tftypes.NewValue(typ, nil)
+		}
+		values["name"] = tftypes.NewValue(tftypes.String, tt.value)
+		req := fwresource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: tftypes.NewValue(objType, values)}}
+		resp := &fwresource.ValidateConfigResponse{}
+		r.(fwresource.ResourceWithValidateConfig).ValidateConfig(ctx, req, resp)
+		if resp.Diagnostics.HasError() != tt.wantError {
+			t.Errorf("%s: error = %v, wantError %v", tt.name, resp.Diagnostics.Errors(), tt.wantError)
+		}
 	}
 }

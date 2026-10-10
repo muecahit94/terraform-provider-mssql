@@ -11,7 +11,6 @@ func TestCreateWindowsLoginStatement(t *testing.T) {
 		{`CORP\alice`, "app", "", `CREATE LOGIN [CORP\alice] FROM WINDOWS WITH DEFAULT_DATABASE = [app]`},
 		{`CORP\alice`, "", "us_english", `CREATE LOGIN [CORP\alice] FROM WINDOWS WITH DEFAULT_LANGUAGE = [us_english]`},
 		{`CORP\ops`, "app", "us_english", `CREATE LOGIN [CORP\ops] FROM WINDOWS WITH DEFAULT_DATABASE = [app], DEFAULT_LANGUAGE = [us_english]`},
-		{"alice@corp.example", "", "", "CREATE LOGIN [alice@corp.example] FROM WINDOWS"},
 		{"a]b", "c]d", "", "CREATE LOGIN [a]]b] FROM WINDOWS WITH DEFAULT_DATABASE = [c]]d]"},
 		{"x]; DROP LOGIN y; --", "", "", "CREATE LOGIN [x]]; DROP LOGIN y; --] FROM WINDOWS"},
 	}

@@ -6,8 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -19,6 +21,23 @@ import (
 
 var _ resource.Resource = &WindowsLoginResource{}
 var _ resource.ResourceWithImportState = &WindowsLoginResource{}
+var _ resource.ResourceWithValidateConfig = &WindowsLoginResource{}
+
+// windowsLoginNamePattern matches DOMAIN\name, the only form CREATE LOGIN ... FROM WINDOWS accepts.
+var windowsLoginNamePattern = regexp.MustCompile(`^[^\\@]+\\[^\\@]+$`)
+
+// ValidateConfig rejects names that SQL Server would refuse at apply time.
+func (r *WindowsLoginResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data WindowsLoginResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() || data.Name.IsNull() || data.Name.IsUnknown() {
+		return
+	}
+	if !windowsLoginNamePattern.MatchString(data.Name.ValueString()) {
+		resp.Diagnostics.AddAttributeError(path.Root("name"), "Invalid Windows login name",
+			fmt.Sprintf("%q must be written as DOMAIN\\name; SQL Server does not accept a UPN (name@domain) for a Windows login.", data.Name.ValueString()))
+	}
+}
 
 // NewWindowsLoginResource creates a new Windows login resource.
 func NewWindowsLoginResource() resource.Resource {
@@ -56,8 +75,9 @@ func (r *WindowsLoginResource) Schema(ctx context.Context, req resource.SchemaRe
 				},
 			},
 			"name": schema.StringAttribute{
-				Description: "The name of the Windows user or group, as `DOMAIN\\name` (or `name@domain`). " +
-					"It must exist in Windows or Active Directory. Changing this forces a new resource to be created.",
+				Description: "The name of the Windows user or group, as `DOMAIN\\name`. " +
+					"It must exist in Windows or Active Directory; a UPN (`name@domain`) is not accepted by SQL Server. " +
+					"Changing this forces a new resource to be created.",
 				Required: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -111,7 +131,8 @@ func (r *WindowsLoginResource) Configure(ctx context.Context, req resource.Confi
 // applyWindowsLogin copies server values into the model.
 func applyWindowsLogin(data *WindowsLoginResourceModel, login *mssql.WindowsLogin) {
 	data.ID = types.StringValue(strconv.Itoa(login.PrincipalID))
-	data.Name = types.StringValue(login.Name)
+	// SQL Server matches Windows names case-insensitively and may store another spelling.
+	data.Name = keepCase(data.Name, login.Name)
 	data.Type = types.StringValue(login.Type)
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabase)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguage)

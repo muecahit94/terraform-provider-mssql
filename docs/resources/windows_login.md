@@ -36,7 +36,7 @@ resource "mssql_windows_login" "former" {
 
 ## Argument Reference
 
-- `name` - (Required) The Windows user or group, as `DOMAIN\name` (or `name@domain`). Changing this forces a new resource.
+- `name` - (Required) The Windows user or group, as `DOMAIN\name`. SQL Server does not accept a UPN (`name@domain`) for a Windows login, so the plan rejects it. The spelling in the configuration is kept when SQL Server stores the name in another case. Changing this forces a new resource.
 - `default_database` - (Optional) The default database of the login. Defaults to the value SQL Server assigns (`master`). Can be changed in place.
 - `default_language` - (Optional) The default language of the login. Defaults to the value SQL Server assigns. Can be changed in place.
 - `is_disabled` - (Optional) Whether the login is disabled. Defaults to `false`. SQL Server can only disable the login of a user, not of a Windows group. Can be changed in place.
