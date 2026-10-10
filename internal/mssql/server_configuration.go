@@ -63,7 +63,7 @@ type configurationStep struct {
 
 const (
 	spConfigure = "EXEC master.dbo.sp_configure @configname = @p1, @configvalue = @p2"
-	reconfigure = "RECONFIGURE"
+	reconfigure = "RECONFIGURE;"
 )
 
 // planConfigurationChange returns the statements that set an option. An advanced option can only be

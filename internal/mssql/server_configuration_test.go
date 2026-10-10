@@ -3,7 +3,10 @@
 
 package mssql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func args(step configurationStep) string {
 	if len(step.Args) == 0 {
@@ -84,5 +87,13 @@ func TestRestartRequired(t *testing.T) {
 		if got := tt.cfg.RestartRequired(); got != tt.want {
 			t.Errorf("%s: RestartRequired() = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+// A bare RECONFIGURE is sent by the driver as a stored procedure call and fails with
+// "Could not find stored procedure 'RECONFIGURE'"; the terminating semicolon makes it a batch.
+func TestReconfigureIsABatch(t *testing.T) {
+	if !strings.HasSuffix(reconfigure, ";") {
+		t.Errorf("reconfigure = %q, must end with a semicolon", reconfigure)
 	}
 }
