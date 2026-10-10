@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -48,6 +49,45 @@ type DatabaseResourceModel struct {
 	RecoveryModel      types.String `tfsdk:"recovery_model"`
 	OwnerName          types.String `tfsdk:"owner_name"`
 	DeletionProtection types.Bool   `tfsdk:"deletion_protection"`
+
+	AutoClose             types.Bool   `tfsdk:"auto_close"`
+	AutoShrink            types.Bool   `tfsdk:"auto_shrink"`
+	PageVerify            types.String `tfsdk:"page_verify"`
+	SnapshotIsolation     types.Bool   `tfsdk:"snapshot_isolation"`
+	ReadCommittedSnapshot types.Bool   `tfsdk:"read_committed_snapshot"`
+	QueryStore            types.Bool   `tfsdk:"query_store"`
+	Trustworthy           types.Bool   `tfsdk:"trustworthy"`
+}
+
+// boolSetting returns a pointer to the planned value when it is set and, for an update, differs from the state.
+func boolSetting(plan, state types.Bool, update bool) *bool {
+	if plan.IsNull() || plan.IsUnknown() || (update && plan.Equal(state)) {
+		return nil
+	}
+	v := plan.ValueBool()
+	return &v
+}
+
+// databaseSettings picks the settings to apply: everything that is configured on create,
+// only what changed on update (state != nil).
+func databaseSettings(plan DatabaseResourceModel, state *DatabaseResourceModel) mssql.DatabaseSettings {
+	update := state != nil
+	if state == nil {
+		state = &DatabaseResourceModel{}
+	}
+	s := mssql.DatabaseSettings{
+		AutoClose:             boolSetting(plan.AutoClose, state.AutoClose, update),
+		AutoShrink:            boolSetting(plan.AutoShrink, state.AutoShrink, update),
+		SnapshotIsolation:     boolSetting(plan.SnapshotIsolation, state.SnapshotIsolation, update),
+		ReadCommittedSnapshot: boolSetting(plan.ReadCommittedSnapshot, state.ReadCommittedSnapshot, update),
+		QueryStore:            boolSetting(plan.QueryStore, state.QueryStore, update),
+		Trustworthy:           boolSetting(plan.Trustworthy, state.Trustworthy, update),
+	}
+	if !plan.PageVerify.IsNull() && !plan.PageVerify.IsUnknown() && (!update || !plan.PageVerify.Equal(state.PageVerify)) {
+		v := plan.PageVerify.ValueString()
+		s.PageVerify = &v
+	}
+	return s
 }
 
 // keepCase returns the configured value when it only differs from the server value by case.
@@ -71,6 +111,13 @@ func applyDatabase(data *DatabaseResourceModel, db *mssql.Database) {
 	data.CompatibilityLevel = types.Int64Value(int64(db.CompatibilityLevel))
 	data.RecoveryModel = types.StringValue(db.RecoveryModel)
 	data.OwnerName = keepCase(data.OwnerName, db.Owner)
+	data.AutoClose = types.BoolValue(db.AutoClose)
+	data.AutoShrink = types.BoolValue(db.AutoShrink)
+	data.PageVerify = types.StringValue(db.PageVerify)
+	data.SnapshotIsolation = types.BoolValue(db.SnapshotIsolation)
+	data.ReadCommittedSnapshot = types.BoolValue(db.ReadCommittedSnapshot)
+	data.QueryStore = types.BoolValue(db.QueryStore)
+	data.Trustworthy = types.BoolValue(db.Trustworthy)
 }
 
 // Metadata returns the resource type name.
@@ -138,6 +185,18 @@ func (r *DatabaseResource) Schema(ctx context.Context, req resource.SchemaReques
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"auto_close": databaseBoolAttribute("Whether the database closes and frees its resources when the last user disconnects (`AUTO_CLOSE`). Usually `false`."),
+			"auto_shrink": databaseBoolAttribute("Whether the database files are shrunk automatically (`AUTO_SHRINK`). Usually `false`: " +
+				"it fragments the indexes and costs performance."),
+			"page_verify": schema.StringAttribute{
+				Description: "How page corruption is detected: `CHECKSUM`, `TORN_PAGE_DETECTION` or `NONE`. " +
+					"`CHECKSUM` is the default of new databases. Can be changed in place.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"deletion_protection": schema.BoolAttribute{
 				Description: "Whether the database is protected from deletion. The provider drops a database " +
 					"(`SINGLE_USER WITH ROLLBACK IMMEDIATE`, `DROP DATABASE`) as soon as it is removed from the " +
@@ -148,6 +207,24 @@ func (r *DatabaseResource) Schema(ctx context.Context, req resource.SchemaReques
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
 			},
+			"snapshot_isolation": databaseBoolAttribute("Whether transactions can use snapshot isolation (`ALLOW_SNAPSHOT_ISOLATION`)."),
+			"read_committed_snapshot": databaseBoolAttribute("Whether READ COMMITTED reads row versions instead of taking shared locks (`READ_COMMITTED_SNAPSHOT`). " +
+				"Changing it needs exclusive access to the database, so it fails at once (`WITH NO_WAIT`) when other connections are open."),
+			"query_store": databaseBoolAttribute("Whether Query Store records query plans and statistics (`QUERY_STORE`)."),
+			"trustworthy": databaseBoolAttribute("Whether the database is trusted for access to resources outside it (`TRUSTWORTHY`). " +
+				"Keep it `false` unless a signed-module alternative is impossible: it is a privilege escalation path."),
+		},
+	}
+}
+
+// databaseBoolAttribute builds an optional, computed boolean setting that can be changed in place.
+func databaseBoolAttribute(description string) schema.BoolAttribute {
+	return schema.BoolAttribute{
+		Description: description + " Defaults to the value SQL Server assigns. Can be changed in place.",
+		Optional:    true,
+		Computed:    true,
+		PlanModifiers: []planmodifier.Bool{
+			boolplanmodifier.UseStateForUnknown(),
 		},
 	}
 }
@@ -180,6 +257,16 @@ func (r *DatabaseResource) ValidateConfig(ctx context.Context, req resource.Vali
 			"Invalid recovery model",
 			fmt.Sprintf("`recovery_model` must be one of %s (upper case), got %q.",
 				strings.Join(mssql.RecoveryModels, ", "), data.RecoveryModel.ValueString()),
+		)
+	}
+
+	if !data.PageVerify.IsNull() && !data.PageVerify.IsUnknown() &&
+		!slices.Contains(mssql.PageVerifyOptions, data.PageVerify.ValueString()) {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("page_verify"),
+			"Invalid page verify option",
+			fmt.Sprintf("`page_verify` must be one of %s (upper case), got %q.",
+				strings.Join(mssql.PageVerifyOptions, ", "), data.PageVerify.ValueString()),
 		)
 	}
 
@@ -258,6 +345,7 @@ func (r *DatabaseResource) Create(ctx context.Context, req resource.CreateReques
 		CompatibilityLevel: int(data.CompatibilityLevel.ValueInt64()),
 		RecoveryModel:      data.RecoveryModel.ValueString(),
 		Owner:              data.OwnerName.ValueString(),
+		Settings:           databaseSettings(data, nil),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create database", err.Error())
@@ -351,6 +439,10 @@ func (r *DatabaseResource) Update(ctx context.Context, req resource.UpdateReques
 			return
 		}
 	}
+	if err := r.client.ApplyDatabaseSettings(ctx, name, databaseSettings(plan, &state)); err != nil {
+		resp.Diagnostics.AddError("Failed to update database", err.Error())
+		return
+	}
 
 	db, err := r.client.GetDatabase(ctx, name)
 	if err != nil {
@@ -417,4 +509,11 @@ func (r *DatabaseResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("owner_name"), db.Owner)...)
 	// Not stored in SQL Server: an imported database starts unprotected.
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("deletion_protection"), false)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_close"), db.AutoClose)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_shrink"), db.AutoShrink)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("page_verify"), db.PageVerify)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("snapshot_isolation"), db.SnapshotIsolation)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("read_committed_snapshot"), db.ReadCommittedSnapshot)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("query_store"), db.QueryStore)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("trustworthy"), db.Trustworthy)...)
 }

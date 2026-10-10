@@ -65,3 +65,63 @@ func TestAlterAuthorizationStatement(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabaseSettingsStatements(t *testing.T) {
+	on, off, checksum := true, false, "CHECKSUM"
+
+	got, err := DatabaseSettings{
+		AutoClose:             &off,
+		AutoShrink:            &off,
+		PageVerify:            &checksum,
+		SnapshotIsolation:     &on,
+		ReadCommittedSnapshot: &on,
+		QueryStore:            &on,
+		Trustworthy:           &off,
+	}.Statements("app")
+	if err != nil {
+		t.Fatalf("Statements() error = %v", err)
+	}
+	want := []string{
+		"ALTER DATABASE [app] SET AUTO_CLOSE OFF",
+		"ALTER DATABASE [app] SET AUTO_SHRINK OFF",
+		"ALTER DATABASE [app] SET PAGE_VERIFY CHECKSUM",
+		"ALTER DATABASE [app] SET ALLOW_SNAPSHOT_ISOLATION ON",
+		"ALTER DATABASE [app] SET READ_COMMITTED_SNAPSHOT ON WITH NO_WAIT",
+		"ALTER DATABASE [app] SET QUERY_STORE = ON",
+		"ALTER DATABASE [app] SET TRUSTWORTHY OFF",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Statements() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("statement %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// A nil field is left alone.
+	if got, _ := (DatabaseSettings{}).Statements("app"); len(got) != 0 {
+		t.Errorf("no settings must give no statements, got %v", got)
+	}
+
+	// The database name is quoted.
+	got, _ = DatabaseSettings{AutoClose: &on}.Statements("a]b")
+	if len(got) != 1 || got[0] != "ALTER DATABASE [a]]b] SET AUTO_CLOSE ON" {
+		t.Errorf("the name must be quoted, got %v", got)
+	}
+}
+
+func TestDatabaseSettingsRejectInvalidPageVerify(t *testing.T) {
+	for _, v := range []string{"", "checksum", "CHECKSUM; DROP DATABASE x", "BOTH"} {
+		v := v
+		if _, err := (DatabaseSettings{PageVerify: &v}).Statements("app"); err == nil {
+			t.Errorf("page verify %q must be rejected before a statement is built", v)
+		}
+	}
+	for _, v := range PageVerifyOptions {
+		v := v
+		if _, err := (DatabaseSettings{PageVerify: &v}).Statements("app"); err != nil {
+			t.Errorf("page verify %q must be accepted: %v", v, err)
+		}
+	}
+}

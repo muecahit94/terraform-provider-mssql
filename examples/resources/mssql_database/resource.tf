@@ -14,4 +14,8 @@ resource "mssql_database" "example" {
 
   # Fail instead of dropping the database when it is removed from the configuration.
   deletion_protection = true
+
+  page_verify             = "CHECKSUM"
+  auto_shrink             = false
+  read_committed_snapshot = true
 }

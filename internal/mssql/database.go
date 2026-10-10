@@ -20,6 +20,14 @@ type Database struct {
 	RecoveryModel      string
 	// Owner is the login that owns the database; empty when the owner login no longer exists.
 	Owner string
+
+	AutoClose             bool
+	AutoShrink            bool
+	PageVerify            string
+	SnapshotIsolation     bool
+	ReadCommittedSnapshot bool
+	QueryStore            bool
+	Trustworthy           bool
 }
 
 // RecoveryModels are the values SQL Server accepts for a database recovery model.
@@ -42,12 +50,20 @@ const databaseSelect = `
 		ISNULL(collation_name, ''),
 		compatibility_level,
 		recovery_model_desc,
-		ISNULL(SUSER_SNAME(owner_sid), '')
+		ISNULL(SUSER_SNAME(owner_sid), ''),
+		is_auto_close_on,
+		is_auto_shrink_on,
+		page_verify_option_desc,
+		CASE WHEN snapshot_isolation_state IN (1, 2) THEN 1 ELSE 0 END,
+		is_read_committed_snapshot_on,
+		is_query_store_on,
+		is_trustworthy_on
 	FROM sys.databases`
 
 func scanDatabase(s interface{ Scan(dest ...any) error }) (*Database, error) {
 	var db Database
-	if err := s.Scan(&db.ID, &db.Name, &db.Collation, &db.CompatibilityLevel, &db.RecoveryModel, &db.Owner); err != nil {
+	if err := s.Scan(&db.ID, &db.Name, &db.Collation, &db.CompatibilityLevel, &db.RecoveryModel, &db.Owner,
+		&db.AutoClose, &db.AutoShrink, &db.PageVerify, &db.SnapshotIsolation, &db.ReadCommittedSnapshot, &db.QueryStore, &db.Trustworthy); err != nil {
 		return nil, err
 	}
 	return &db, nil
@@ -136,6 +152,8 @@ type CreateDatabaseOptions struct {
 	RecoveryModel string
 	// Owner is the login that becomes the owner after creation. Empty keeps the creator.
 	Owner string
+	// Settings are applied after creation; unset ones keep the server defaults.
+	Settings DatabaseSettings
 }
 
 // CreateDatabase creates a new database.
@@ -168,6 +186,9 @@ func (c *Client) CreateDatabase(ctx context.Context, opts CreateDatabaseOptions)
 			return nil, err
 		}
 	}
+	if err := c.ApplyDatabaseSettings(ctx, opts.Name, opts.Settings); err != nil {
+		return nil, err
+	}
 
 	return c.GetDatabase(ctx, opts.Name)
 }
@@ -181,6 +202,82 @@ func alterAuthorizationStatement(database, login string) string {
 func (c *Client) SetDatabaseOwner(ctx context.Context, name, login string) error {
 	if _, err := c.ExecContext(ctx, alterAuthorizationStatement(name, login)); err != nil {
 		return fmt.Errorf("failed to set database owner: %w", err)
+	}
+	return nil
+}
+
+// PageVerifyOptions are the values SQL Server accepts for PAGE_VERIFY.
+var PageVerifyOptions = []string{"CHECKSUM", "TORN_PAGE_DETECTION", "NONE"}
+
+// DatabaseSettings are the ALTER DATABASE ... SET options that can be changed in place.
+// A nil field is left as it is.
+type DatabaseSettings struct {
+	AutoClose             *bool
+	AutoShrink            *bool
+	PageVerify            *string
+	SnapshotIsolation     *bool
+	ReadCommittedSnapshot *bool
+	QueryStore            *bool
+	Trustworthy           *bool
+}
+
+func onOffKeyword(b bool) string {
+	if b {
+		return "ON"
+	}
+	return "OFF"
+}
+
+// Statements returns the ALTER DATABASE statements that apply the settings.
+// An invalid PAGE_VERIFY value is reported before any statement is built, because the
+// value is part of the statement text.
+func (s DatabaseSettings) Statements(database string) ([]string, error) {
+	db := quoteName(database)
+	var out []string
+	if s.AutoClose != nil {
+		out = append(out, "ALTER DATABASE "+db+" SET AUTO_CLOSE "+onOffKeyword(*s.AutoClose))
+	}
+	if s.AutoShrink != nil {
+		out = append(out, "ALTER DATABASE "+db+" SET AUTO_SHRINK "+onOffKeyword(*s.AutoShrink))
+	}
+	if s.PageVerify != nil {
+		valid := false
+		for _, v := range PageVerifyOptions {
+			if *s.PageVerify == v {
+				valid = true
+			}
+		}
+		if !valid {
+			return nil, fmt.Errorf("invalid page verify option %q: must be one of %s", *s.PageVerify, strings.Join(PageVerifyOptions, ", "))
+		}
+		out = append(out, "ALTER DATABASE "+db+" SET PAGE_VERIFY "+*s.PageVerify)
+	}
+	if s.SnapshotIsolation != nil {
+		out = append(out, "ALTER DATABASE "+db+" SET ALLOW_SNAPSHOT_ISOLATION "+onOffKeyword(*s.SnapshotIsolation))
+	}
+	if s.ReadCommittedSnapshot != nil {
+		// Needs exclusive access to the database; fail at once instead of waiting for the connections to end.
+		out = append(out, "ALTER DATABASE "+db+" SET READ_COMMITTED_SNAPSHOT "+onOffKeyword(*s.ReadCommittedSnapshot)+" WITH NO_WAIT")
+	}
+	if s.QueryStore != nil {
+		out = append(out, "ALTER DATABASE "+db+" SET QUERY_STORE = "+onOffKeyword(*s.QueryStore))
+	}
+	if s.Trustworthy != nil {
+		out = append(out, "ALTER DATABASE "+db+" SET TRUSTWORTHY "+onOffKeyword(*s.Trustworthy))
+	}
+	return out, nil
+}
+
+// ApplyDatabaseSettings changes the settings of a database.
+func (c *Client) ApplyDatabaseSettings(ctx context.Context, name string, settings DatabaseSettings) error {
+	statements, err := settings.Statements(name)
+	if err != nil {
+		return err
+	}
+	for _, statement := range statements {
+		if _, err := c.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("failed to change database settings (%s): %w", statement, err)
+		}
 	}
 	return nil
 }

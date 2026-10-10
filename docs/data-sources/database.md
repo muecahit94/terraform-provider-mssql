@@ -32,3 +32,5 @@ output "database_id" {
 - `compatibility_level` - The compatibility level of the database, for example `160`.
 - `recovery_model` - The recovery model: `FULL`, `SIMPLE` or `BULK_LOGGED`.
 - `owner_name` - The login that owns the database; empty when the owner login no longer exists.
+- `auto_close`, `auto_shrink`, `snapshot_isolation`, `read_committed_snapshot`, `query_store`, `trustworthy` - Whether the option is on.
+- `page_verify` - `CHECKSUM`, `TORN_PAGE_DETECTION` or `NONE`.
