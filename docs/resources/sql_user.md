@@ -58,11 +58,28 @@ Omitting `login_name` creates the user with `CREATE USER ... WITHOUT LOGIN`. Thi
 is represented, for example after a database was restored on another server (an orphaned user, whose SID matches no
 login): it can be imported, and a configuration that omits `login_name` shows no diff.
 
+### Map a User to Another Login, Fix an Orphaned User
+
+Changing `login_name` runs `ALTER USER ... WITH LOGIN`: the user keeps its principal ID, permissions and role
+memberships. This also fixes an **orphaned user** (for example after a database was restored on another server), whose SID
+matches no login: import it without `login_name`, then set `login_name` to the login it belongs to.
+
+```hcl
+resource "mssql_sql_user" "restored" {
+  database_name = "app_db"
+  name          = "app_user"
+  login_name    = "app_user" # was null while the user was orphaned
+}
+```
+
+SQL Server cannot do this for a user that was created `WITHOUT LOGIN`, so giving such a user a login (or removing the
+login of a mapped user) replaces it: the plan then shows *must be replaced*.
+
 ## Argument Reference
 
 - `database_name` - (Required) The name of the database. Changing this forces a new resource.
 - `name` - (Required) The name of the user. Changing this forces a new resource.
-- `login_name` - (Optional) The name of the login to map this user to. Omit it for a user without a login (`WITHOUT LOGIN`) or an orphaned user. Changing this forces a new resource.
+- `login_name` - (Optional) The name of the login to map this user to. Omit it for a user without a login (`WITHOUT LOGIN`) or an orphaned user. Changing it maps the user to the other login **in place** (`ALTER USER ... WITH LOGIN`), keeping its permissions and role memberships. Only a user created `WITHOUT LOGIN` that gets a login, or a user that loses its login, forces a new resource.
 - `default_schema` - (Optional) The default schema for the user. Defaults to `dbo`.
 - `roles` - (Optional) Set of database roles to assign to this user.
 
