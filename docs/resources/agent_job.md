@@ -64,7 +64,7 @@ resource "mssql_agent_job" "nightly_import" {
 - `steps` - (Optional) The steps, in order: the first is step 1. A change of any step replaces **all** steps of the job; the job and its history stay. Each step has:
   - `name` - (Required) The name of the step.
   - `subsystem` - (Optional) `TSQL` (default), `CmdExec`, `PowerShell`, `SSIS`, ...
-  - `command` - (Required) T-SQL, a command line or a script, depending on the subsystem.
+  - `command` - (Required, sensitive) T-SQL, a command line or a script, depending on the subsystem. Hidden in plan output, because commands often carry connection strings or credentials; it is still stored in the state.
   - `database_name` - (Optional) The database a `TSQL` step runs in; SQL Server uses `master` when it is not set.
   - `on_success_action` / `on_fail_action` - (Optional) `1` quit with success, `2` quit with failure, `3` go to the next step, `4` go to `on_success_step_id` / `on_fail_step_id`. Default `1` and `2`.
   - `on_success_step_id` / `on_fail_step_id` - (Optional) The step to go to for action `4`. Default `0`.
@@ -77,7 +77,7 @@ resource "mssql_agent_job" "nightly_import" {
   - `freq_subday_type` - (Optional) The unit within a day: `1` at the given time, `2` seconds, `4` minutes, `8` hours. Default `1`.
   - `freq_subday_interval` - (Optional) How many `freq_subday_type` units between runs. Default `0`.
   - `freq_relative_interval` - (Optional) For `freq_type` `32`: `1` first, `2` second, `4` third, `8` fourth, `16` last. Default `0`.
-  - `freq_recurrence_factor` - (Optional) How many weeks or months between runs. Default `0`.
+  - `freq_recurrence_factor` - (Optional) How many weeks or months between runs. Default `0`. Weekly and monthly schedules (`freq_type` `8`, `16`, `32`) need `1` or more; the plan rejects them otherwise.
   - `active_start_date` / `active_end_date` - (Optional) The days the schedule is active, as `yyyymmdd`. The start defaults to today, the end to `99991231`.
   - `active_start_time` / `active_end_time` - (Optional) The time of day the schedule starts and ends, as `hhmmss`. Defaults `0` and `235959`.
 
@@ -87,9 +87,19 @@ resource "mssql_agent_job" "nightly_import" {
 
 ## Behaviour to know
 
+- Creating a job and changing it run in one transaction: when a step or schedule is rejected, nothing is changed.
 - Deleting the resource deletes the job and the schedules only it used.
-- Schedules shared with other jobs are read like any other schedule, but replacing the schedules of a job detaches them (and deletes them only when no other job uses them).
+- Schedules shared with other jobs are read like any other schedule, but replacing the schedules of a job detaches them (and deletes them only when no other job uses them). Schedules are detached by ID, so another schedule with the same name is not touched.
 - Alerts, operator notifications, proxies and job server targets other than the local server are not managed.
+
+## Security
+
+An Agent job runs code with more rights than the login that created it may have:
+
+- `TSQL` steps run as the job owner. A job owned by a `sysadmin` login (such as `sa`) runs its T-SQL as `sysadmin`.
+- `CmdExec` and `PowerShell` steps run operating system commands as the SQL Server Agent service account (or a proxy).
+
+Review `owner_login_name`, `subsystem` and `command` in a plan as carefully as a change of permissions.
 
 ## Import
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -21,6 +22,32 @@ import (
 
 var _ resource.Resource = &AgentJobResource{}
 var _ resource.ResourceWithImportState = &AgentJobResource{}
+var _ resource.ResourceWithValidateConfig = &AgentJobResource{}
+
+// ValidateConfig rejects schedules that sp_add_jobschedule would refuse after the job was half built.
+func (r *AgentJobResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data AgentJobResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	for name, s := range data.Schedules {
+		if s.FreqType.IsUnknown() || s.FreqRecurrenceFactor.IsUnknown() {
+			continue
+		}
+		switch s.FreqType.ValueInt64() {
+		case 8, 16, 32:
+			if s.FreqRecurrenceFactor.IsNull() || s.FreqRecurrenceFactor.ValueInt64() < 1 {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("schedules").AtMapKey(name).AtName("freq_recurrence_factor"),
+					"Missing recurrence factor",
+					fmt.Sprintf("Schedule %q is weekly or monthly (freq_type %d): set freq_recurrence_factor to 1 or more (every N weeks or months).",
+						name, s.FreqType.ValueInt64()),
+				)
+			}
+		}
+	}
+}
 
 // NewAgentJobResource creates a new SQL Server Agent job resource.
 func NewAgentJobResource() resource.Resource {
@@ -140,7 +167,12 @@ func (r *AgentJobResource) Schema(ctx context.Context, req resource.SchemaReques
 							Description: "The subsystem that runs the command: `TSQL`, `CmdExec`, `PowerShell`, `SSIS`, ... Defaults to `TSQL`.",
 							Optional:    true, Computed: true, Default: stringdefault.StaticString("TSQL"),
 						},
-						"command": schema.StringAttribute{Description: "The command: T-SQL for `TSQL`, a command line for `CmdExec`, a script for `PowerShell`.", Required: true},
+						"command": schema.StringAttribute{
+							Description: "The command: T-SQL for `TSQL`, a command line for `CmdExec`, a script for `PowerShell`. " +
+								"Sensitive, because commands often carry connection strings or credentials.",
+							Required:  true,
+							Sensitive: true,
+						},
 						"database_name": schema.StringAttribute{
 							Description: "The database a `TSQL` step runs in. SQL Server uses `master` when it is not set.",
 							Optional:    true, Computed: true,
@@ -352,21 +384,9 @@ func (r *AgentJobResource) Update(ctx context.Context, req resource.UpdateReques
 	job := jobFromModel(plan)
 	name := state.Name.ValueString()
 
-	if err := r.client.UpdateAgentJobProperties(ctx, job); err != nil {
+	if err := r.client.UpdateAgentJob(ctx, job, !stepsEqual(plan.Steps, state.Steps), !schedulesEqual(plan.Schedules, state.Schedules)); err != nil {
 		resp.Diagnostics.AddError("Failed to update the agent job", err.Error())
 		return
-	}
-	if !stepsEqual(plan.Steps, state.Steps) {
-		if err := r.client.ReplaceAgentJobSteps(ctx, name, job.Steps); err != nil {
-			resp.Diagnostics.AddError("Failed to update the steps of the agent job", err.Error())
-			return
-		}
-	}
-	if !schedulesEqual(plan.Schedules, state.Schedules) {
-		if err := r.client.ReplaceAgentJobSchedules(ctx, name, job.Schedules); err != nil {
-			resp.Diagnostics.AddError("Failed to update the schedules of the agent job", err.Error())
-			return
-		}
 	}
 
 	updated, err := r.client.GetAgentJob(ctx, name)

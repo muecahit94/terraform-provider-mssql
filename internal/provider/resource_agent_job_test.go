@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
@@ -29,6 +32,58 @@ func TestAgentJobResourceSchema(t *testing.T) {
 	for _, name := range []string{"steps", "schedules"} {
 		if !resp.Schema.Attributes[name].IsOptional() {
 			t.Errorf("%s must be optional: a job may have neither", name)
+		}
+	}
+	steps := resp.Schema.Attributes["steps"].(schema.ListNestedAttribute)
+	if !steps.NestedObject.Attributes["command"].IsSensitive() {
+		t.Error("a step command can carry credentials and must be sensitive")
+	}
+}
+
+func TestAgentJobValidateConfig(t *testing.T) {
+	ctx := context.Background()
+	schemaResp := &fwresource.SchemaResponse{}
+	r := NewAgentJobResource()
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	schedType := objType.AttributeTypes["schedules"].(tftypes.Map).ElementType.(tftypes.Object)
+
+	schedule := func(freqType, recurrence interface{}) tftypes.Value {
+		values := map[string]tftypes.Value{}
+		for n, typ := range schedType.AttributeTypes {
+			values[n] = tftypes.NewValue(typ, nil)
+		}
+		values["freq_type"] = tftypes.NewValue(tftypes.Number, freqType)
+		values["freq_recurrence_factor"] = tftypes.NewValue(tftypes.Number, recurrence)
+		return tftypes.NewValue(schedType, values)
+	}
+
+	tests := []struct {
+		name       string
+		freqType   interface{}
+		recurrence interface{}
+		wantError  bool
+	}{
+		{"daily without recurrence", 4, nil, false},
+		{"weekly without recurrence", 8, nil, true},
+		{"weekly with recurrence 0", 8, 0, true},
+		{"weekly every week", 8, 1, false},
+		{"monthly without recurrence", 16, nil, true},
+		{"monthly relative every 2 months", 32, 2, false},
+		{"unknown frequency", tftypes.UnknownValue, nil, false},
+	}
+	for _, tt := range tests {
+		values := map[string]tftypes.Value{}
+		for n, typ := range objType.AttributeTypes {
+			values[n] = tftypes.NewValue(typ, nil)
+		}
+		values["name"] = tftypes.NewValue(tftypes.String, "job")
+		values["schedules"] = tftypes.NewValue(objType.AttributeTypes["schedules"], map[string]tftypes.Value{"s": schedule(tt.freqType, tt.recurrence)})
+		req := fwresource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: tftypes.NewValue(objType, values)}}
+		resp := &fwresource.ValidateConfigResponse{}
+		r.(fwresource.ResourceWithValidateConfig).ValidateConfig(ctx, req, resp)
+		if resp.Diagnostics.HasError() != tt.wantError {
+			t.Errorf("%s: error = %v, wantError %v", tt.name, resp.Diagnostics.Errors(), tt.wantError)
 		}
 	}
 }

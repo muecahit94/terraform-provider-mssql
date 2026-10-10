@@ -28,6 +28,8 @@ type AgentJobStep struct {
 // AgentJobSchedule is a schedule of a job. The numeric fields use the codes of
 // msdb.dbo.sp_add_jobschedule: dates are yyyymmdd and times hhmmss.
 type AgentJobSchedule struct {
+	// ID is the schedule_id read from the server; it is not used when a schedule is added.
+	ID                   int
 	Name                 string
 	Enabled              bool
 	FreqType             int
@@ -54,11 +56,38 @@ type AgentJob struct {
 	Schedules      []AgentJobSchedule
 }
 
+// sqlRunner is implemented by *sql.DB and *sql.Tx, so that a job can be read and changed inside a transaction.
+type sqlRunner interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// inTransaction runs fn in a transaction and rolls it back when fn fails, so that a job is never left half-changed.
+func (c *Client) inTransaction(ctx context.Context, fn func(tx sqlRunner) error) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start a transaction: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit the transaction: %w", err)
+	}
+	return nil
+}
+
 // GetAgentJob retrieves a job with its steps and schedules, or nil when it does not exist.
 func (c *Client) GetAgentJob(ctx context.Context, name string) (*AgentJob, error) {
+	return getAgentJob(ctx, c.db, name)
+}
+
+func getAgentJob(ctx context.Context, db sqlRunner, name string) (*AgentJob, error) {
 	var job AgentJob
 	var jobID string
-	err := c.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 		SELECT
 			CONVERT(nvarchar(36), j.job_id),
 			j.name,
@@ -77,7 +106,7 @@ func (c *Client) GetAgentJob(ctx context.Context, name string) (*AgentJob, error
 	}
 	job.ID = jobID
 
-	steps, err := c.QueryContext(ctx, `
+	steps, err := db.QueryContext(ctx, `
 		SELECT
 			step_name,
 			subsystem,
@@ -108,8 +137,9 @@ func (c *Client) GetAgentJob(ctx context.Context, name string) (*AgentJob, error
 		return nil, err
 	}
 
-	schedules, err := c.QueryContext(ctx, `
+	schedules, err := db.QueryContext(ctx, `
 		SELECT
+			sc.schedule_id,
 			sc.name,
 			sc.enabled,
 			sc.freq_type,
@@ -132,7 +162,7 @@ func (c *Client) GetAgentJob(ctx context.Context, name string) (*AgentJob, error
 	defer schedules.Close()
 	for schedules.Next() {
 		var s AgentJobSchedule
-		if err := schedules.Scan(&s.Name, &s.Enabled, &s.FreqType, &s.FreqInterval, &s.FreqSubdayType, &s.FreqSubdayInterval,
+		if err := schedules.Scan(&s.ID, &s.Name, &s.Enabled, &s.FreqType, &s.FreqInterval, &s.FreqSubdayType, &s.FreqSubdayInterval,
 			&s.FreqRelativeInterval, &s.FreqRecurrenceFactor, &s.ActiveStartDate, &s.ActiveEndDate, &s.ActiveStartTime, &s.ActiveEndTime); err != nil {
 			return nil, fmt.Errorf("failed to scan an agent job schedule: %w", err)
 		}
@@ -179,74 +209,88 @@ const addJobScheduleSQL = `EXEC msdb.dbo.sp_add_jobschedule
 	@freq_subday_interval = @p7, @freq_relative_interval = @p8, @freq_recurrence_factor = @p9,
 	@active_start_date = @p10, @active_end_date = @p11, @active_start_time = @p12, @active_end_time = @p13`
 
-// CreateAgentJob creates a job with its steps and schedules on the local server.
+// CreateAgentJob creates a job with its steps and schedules on the local server, all or nothing.
 func (c *Client) CreateAgentJob(ctx context.Context, job AgentJob) (*AgentJob, error) {
 	enabled := 0
 	if job.Enabled {
 		enabled = 1
 	}
-	if _, err := c.ExecContext(ctx, `EXEC msdb.dbo.sp_add_job
+	err := c.inTransaction(ctx, func(tx sqlRunner) error {
+		if _, err := tx.ExecContext(ctx, `EXEC msdb.dbo.sp_add_job
 		@job_name = @p1, @enabled = @p2, @description = @p3, @owner_login_name = @p4, @category_name = @p5`,
-		job.Name, enabled, nullIfEmptyString(job.Description), nullIfEmptyString(job.OwnerLoginName), nullIfEmptyString(job.CategoryName)); err != nil {
-		return nil, fmt.Errorf("failed to create the agent job: %w", err)
-	}
-
-	// Do not leave a half-built job behind.
-	fail := func(err error) (*AgentJob, error) {
-		_ = c.DeleteAgentJob(ctx, job.Name)
+			job.Name, enabled, nullIfEmptyString(job.Description), nullIfEmptyString(job.OwnerLoginName), nullIfEmptyString(job.CategoryName)); err != nil {
+			return fmt.Errorf("failed to create the agent job: %w", err)
+		}
+		if err := replaceAgentJobSteps(ctx, tx, job.Name, job.Steps); err != nil {
+			return err
+		}
+		if err := replaceAgentJobSchedules(ctx, tx, job.Name, job.Schedules); err != nil {
+			return err
+		}
+		// A job must be assigned to a server to run; this provider manages the local server.
+		if _, err := tx.ExecContext(ctx, "EXEC msdb.dbo.sp_add_jobserver @job_name = @p1, @server_name = N'(local)'", job.Name); err != nil {
+			return fmt.Errorf("failed to assign the agent job to the local server: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
-	}
-	if err := c.ReplaceAgentJobSteps(ctx, job.Name, job.Steps); err != nil {
-		return fail(err)
-	}
-	if err := c.ReplaceAgentJobSchedules(ctx, job.Name, job.Schedules); err != nil {
-		return fail(err)
-	}
-	// A job must be assigned to a server to run; this provider manages the local server.
-	if _, err := c.ExecContext(ctx, "EXEC msdb.dbo.sp_add_jobserver @job_name = @p1, @server_name = N'(local)'", job.Name); err != nil {
-		return fail(fmt.Errorf("failed to assign the agent job to the local server: %w", err))
 	}
 	return c.GetAgentJob(ctx, job.Name)
 }
 
-// UpdateAgentJobProperties changes the description, the enabled state, the owner and the category.
-func (c *Client) UpdateAgentJobProperties(ctx context.Context, job AgentJob) error {
+// UpdateAgentJob changes the description, the enabled state, the owner and the category of a job and,
+// when asked, replaces its steps and schedules, all or nothing.
+func (c *Client) UpdateAgentJob(ctx context.Context, job AgentJob, replaceSteps, replaceSchedules bool) error {
 	enabled := 0
 	if job.Enabled {
 		enabled = 1
 	}
-	if _, err := c.ExecContext(ctx, `EXEC msdb.dbo.sp_update_job
+	return c.inTransaction(ctx, func(tx sqlRunner) error {
+		if _, err := tx.ExecContext(ctx, `EXEC msdb.dbo.sp_update_job
 		@job_name = @p1, @enabled = @p2, @description = @p3, @owner_login_name = @p4, @category_name = @p5`,
-		job.Name, enabled, job.Description, nullIfEmptyString(job.OwnerLoginName), nullIfEmptyString(job.CategoryName)); err != nil {
-		return fmt.Errorf("failed to update the agent job: %w", err)
-	}
-	return nil
+			job.Name, enabled, job.Description, nullIfEmptyString(job.OwnerLoginName), nullIfEmptyString(job.CategoryName)); err != nil {
+			return fmt.Errorf("failed to update the agent job: %w", err)
+		}
+		if replaceSteps {
+			if err := replaceAgentJobSteps(ctx, tx, job.Name, job.Steps); err != nil {
+				return err
+			}
+		}
+		if replaceSchedules {
+			if err := replaceAgentJobSchedules(ctx, tx, job.Name, job.Schedules); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-// ReplaceAgentJobSteps replaces all steps of a job with the given ones, in order (step 1, 2, ...).
-func (c *Client) ReplaceAgentJobSteps(ctx context.Context, jobName string, steps []AgentJobStep) error {
+// replaceAgentJobSteps replaces all steps of a job with the given ones, in order (step 1, 2, ...).
+func replaceAgentJobSteps(ctx context.Context, db sqlRunner, jobName string, steps []AgentJobStep) error {
 	// step_id 0 deletes all steps of the job.
-	if _, err := c.ExecContext(ctx, "EXEC msdb.dbo.sp_delete_jobstep @job_name = @p1, @step_id = 0", jobName); err != nil {
+	if _, err := db.ExecContext(ctx, "EXEC msdb.dbo.sp_delete_jobstep @job_name = @p1, @step_id = 0", jobName); err != nil {
 		return fmt.Errorf("failed to delete the steps of the agent job: %w", err)
 	}
 	for i, step := range steps {
-		if _, err := c.ExecContext(ctx, addJobStepSQL, addJobStepArgs(jobName, i+1, step)...); err != nil {
+		if _, err := db.ExecContext(ctx, addJobStepSQL, addJobStepArgs(jobName, i+1, step)...); err != nil {
 			return fmt.Errorf("failed to add step %q to the agent job: %w", step.Name, err)
 		}
 	}
 	return nil
 }
 
-// ReplaceAgentJobSchedules replaces all schedules of a job with the given ones.
-func (c *Client) ReplaceAgentJobSchedules(ctx context.Context, jobName string, schedules []AgentJobSchedule) error {
-	current, err := c.GetAgentJob(ctx, jobName)
+// replaceAgentJobSchedules replaces all schedules of a job with the given ones. Schedules are detached by
+// ID: schedule names are not unique on a server, so detaching by name can hit another job's schedule.
+func replaceAgentJobSchedules(ctx context.Context, db sqlRunner, jobName string, schedules []AgentJobSchedule) error {
+	current, err := getAgentJob(ctx, db, jobName)
 	if err != nil {
 		return err
 	}
 	if current != nil {
 		for _, existing := range current.Schedules {
-			if _, err := c.ExecContext(ctx, "EXEC msdb.dbo.sp_detach_schedule @job_name = @p1, @schedule_name = @p2, @delete_unused_schedule = 1",
-				jobName, existing.Name); err != nil {
+			if _, err := db.ExecContext(ctx, "EXEC msdb.dbo.sp_detach_schedule @job_name = @p1, @schedule_id = @p2, @delete_unused_schedule = 1",
+				jobName, existing.ID); err != nil {
 				return fmt.Errorf("failed to remove the schedule %q of the agent job: %w", existing.Name, err)
 			}
 		}
@@ -256,7 +300,7 @@ func (c *Client) ReplaceAgentJobSchedules(ctx context.Context, jobName string, s
 	sorted := append([]AgentJobSchedule(nil), schedules...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, schedule := range sorted {
-		if _, err := c.ExecContext(ctx, addJobScheduleSQL, addJobScheduleArgs(jobName, schedule)...); err != nil {
+		if _, err := db.ExecContext(ctx, addJobScheduleSQL, addJobScheduleArgs(jobName, schedule)...); err != nil {
 			return fmt.Errorf("failed to add the schedule %q to the agent job: %w", schedule.Name, err)
 		}
 	}
