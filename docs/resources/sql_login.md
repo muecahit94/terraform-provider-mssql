@@ -133,8 +133,9 @@ resource "mssql_sql_login" "existing" {
 }
 ```
 
-A password is only required to **create** a login; without one the plan fails with *Missing password*. To start managing
-the password later, add `password_wo` (and bump `password_wo_version` to rotate it).
+A password is only required to **create** a login, which includes replacing it (a change of `name`, `login_name`,
+`sid` or the `server` block); without one the plan fails with *Missing password*. An empty password is always rejected.
+To start managing the password later, add `password_wo` (and bump `password_wo_version` to rotate it).
 
 ## Argument Reference
 

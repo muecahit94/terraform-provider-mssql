@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/muecahit94/terraform-provider-mssql/internal/mssql"
 )
 
@@ -563,11 +565,74 @@ func TestValidateLoginPasswordOnCreate(t *testing.T) {
 		// an ephemeral value is unknown until apply: it counts as set
 		{"unknown write-only password", SQLLoginResourceModel{Password: types.StringNull(), PasswordWO: types.StringUnknown()}, false},
 		{"unknown password", SQLLoginResourceModel{Password: types.StringUnknown(), PasswordWO: types.StringNull()}, false},
+		{"empty password", SQLLoginResourceModel{Password: types.StringValue(""), PasswordWO: types.StringNull()}, true},
+		{"empty write-only password", SQLLoginResourceModel{Password: types.StringNull(), PasswordWO: types.StringValue("")}, true},
 	}
 	for _, tt := range tests {
 		diags := validateLoginPasswordOnCreate(tt.config)
 		if diags.HasError() != tt.wantError {
 			t.Errorf("%s: error = %v, wantError %v", tt.name, diags.Errors(), tt.wantError)
 		}
+	}
+}
+
+// loginObject builds a raw value for the login schema; attributes not given are null.
+func loginObject(objType tftypes.Object, values map[string]interface{}) tftypes.Value {
+	raw := map[string]tftypes.Value{}
+	for name, typ := range objType.AttributeTypes {
+		raw[name] = tftypes.NewValue(typ, nil)
+	}
+	for name, v := range values {
+		raw[name] = tftypes.NewValue(objType.AttributeTypes[name], v)
+	}
+	return tftypes.NewValue(objType, raw)
+}
+
+func TestSQLLoginModifyPlanRequiresPasswordOnCreateAndReplace(t *testing.T) {
+	ctx := context.Background()
+	schemaResp := &fwresource.SchemaResponse{}
+	r := NewSQLLoginResource()
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+
+	existing := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01"})
+	noState := tftypes.NewValue(objType, nil)
+
+	tests := []struct {
+		name      string
+		state     tftypes.Value
+		plan      map[string]interface{}
+		wantError bool
+	}{
+		{"create without a password", noState, map[string]interface{}{"name": "app"}, true},
+		{"create with a password", noState, map[string]interface{}{"name": "app", "password": "P@ssw0rd123!"}, false},
+		{"create with an empty password", noState, map[string]interface{}{"name": "app", "password": ""}, true},
+		{"existing login without a password", existing, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01"}, false},
+		{"rename without a password replaces it", existing, map[string]interface{}{"id": "300", "name": "app2", "sid": "0x01"}, true},
+		{"new SID without a password replaces it", existing, map[string]interface{}{"id": "300", "name": "app", "sid": "0x02"}, true},
+		{"rename with a password", existing, map[string]interface{}{"id": "300", "name": "app2", "sid": "0x01", "password": "P@ssw0rd123!"}, false},
+		{"unknown name is decided at apply time", existing, map[string]interface{}{"id": "300", "name": tftypes.UnknownValue, "sid": "0x01"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := loginObject(objType, tt.plan)
+			req := fwresource.ModifyPlanRequest{
+				State:  tfsdk.State{Schema: schemaResp.Schema, Raw: tt.state},
+				Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+				Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+			}
+			resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+			r.(fwresource.ResourceWithModifyPlan).ModifyPlan(ctx, req, resp)
+			if resp.Diagnostics.HasError() != tt.wantError {
+				t.Errorf("ModifyPlan() error = %v, wantError %v", resp.Diagnostics.Errors(), tt.wantError)
+			}
+		})
+	}
+}
+
+func TestCreateSQLLoginRejectsEmptyPassword(t *testing.T) {
+	c := &mssql.Client{}
+	if _, err := c.CreateSQLLogin(context.Background(), mssql.CreateSQLLoginOptions{Name: "app"}); err == nil {
+		t.Error("CreateSQLLogin must refuse an empty password before reaching the server")
 	}
 }

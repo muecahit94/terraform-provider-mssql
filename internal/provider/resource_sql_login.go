@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -67,7 +68,9 @@ type SQLLoginResourceModel struct {
 // needs none in the configuration: its password is not readable and is left alone.
 func validateLoginPasswordOnCreate(config SQLLoginResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	if config.Password.IsNull() && config.PasswordWO.IsNull() {
+	emptyPassword := !config.Password.IsNull() && !config.Password.IsUnknown() && config.Password.ValueString() == ""
+	emptyWriteOnly := !config.PasswordWO.IsNull() && !config.PasswordWO.IsUnknown() && config.PasswordWO.ValueString() == ""
+	if (config.Password.IsNull() && config.PasswordWO.IsNull()) || emptyPassword || emptyWriteOnly {
 		diags.AddAttributeError(
 			path.Root("password"),
 			"Missing password",
@@ -79,10 +82,42 @@ func validateLoginPasswordOnCreate(config SQLLoginResourceModel) diag.Diagnostic
 	return diags
 }
 
-// ModifyPlan requires a password only when the login is about to be created.
+// changedKnown reports whether a known planned value differs from the state; unknown values are
+// decided at apply time, where CreateSQLLogin still rejects an empty password.
+func changedKnown(plan, state attr.Value) bool {
+	return !plan.IsUnknown() && !plan.Equal(state)
+}
+
+// loginReplaced reports whether the plan replaces the login, judged by the attributes with RequiresReplace
+// (the resource-level ModifyPlan does not receive the attribute-level result).
+func loginReplaced(plan, state SQLLoginResourceModel) bool {
+	if changedKnown(plan.Name, state.Name) || changedKnown(plan.LoginName, state.LoginName) || changedKnown(plan.SID, state.SID) {
+		return true
+	}
+	planServer, stateServer := plan.Server, state.Server
+	if planServer == nil {
+		planServer = &ServerModel{}
+	}
+	if stateServer == nil {
+		stateServer = &ServerModel{}
+	}
+	return changedKnown(planServer.Hostname, stateServer.Hostname) || changedKnown(planServer.Host, stateServer.Host) ||
+		(!planServer.Port.IsNull() && !stateServer.Port.IsNull() && changedKnown(planServer.Port, stateServer.Port))
+}
+
+// ModifyPlan requires a password when the login is about to be created, including a replacement.
 func (r *SQLLoginResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if !req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
 		return
+	}
+
+	if !req.State.Raw.IsNull() {
+		var plan, state SQLLoginResourceModel
+		resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() || !loginReplaced(plan, state) {
+			return
+		}
 	}
 
 	var config SQLLoginResourceModel

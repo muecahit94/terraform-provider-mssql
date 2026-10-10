@@ -185,6 +185,10 @@ type CreateSQLLoginOptions struct {
 
 // CreateSQLLogin creates a new SQL login.
 func (c *Client) CreateSQLLogin(ctx context.Context, opts CreateSQLLoginOptions) (*SQLLogin, error) {
+	if opts.Password == "" {
+		return nil, fmt.Errorf("refusing to create SQL login %q with an empty password", opts.Name)
+	}
+
 	defaultDB := opts.DefaultDatabase
 	if defaultDB == "" {
 		defaultDB = "master"
