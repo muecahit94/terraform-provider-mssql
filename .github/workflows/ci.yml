@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: false  # Disable caching to avoid tar errors
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: false  # Disable caching to avoid tar errors
@@ -62,16 +62,13 @@ jobs:
     name: Security Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: false  # Disable caching to avoid tar errors
-
       - name: Run govulncheck
         uses: golang/govulncheck-action@v1
         with:
+          # Scan with the toolchain from go.mod that the release is built with, not the newest Go.
+          go-version-input: ''
+          go-version-file: 'go.mod'
+          check-latest: false
           go-package: ./...
 
   # Build job - runs linux/amd64 by default, all platforms when build_all_platforms is true
@@ -88,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: false  # Disable caching to avoid tar errors
