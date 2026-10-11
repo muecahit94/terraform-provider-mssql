@@ -32,9 +32,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+
+      # Refuse to publish binaries built with a Go release or modules that have known vulnerabilities.
+      - name: Run govulncheck with the release toolchain
+        run: |
+          go version
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
