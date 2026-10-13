@@ -56,13 +56,6 @@ type AgentJob struct {
 	Schedules      []AgentJobSchedule
 }
 
-// sqlRunner is implemented by *sql.DB and *sql.Tx, so that a job can be read and changed inside a transaction.
-type sqlRunner interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // inTransaction runs fn in a transaction and rolls it back when fn fails, so that a job is never left half-changed.
 func (c *Client) inTransaction(ctx context.Context, fn func(tx sqlRunner) error) error {
 	tx, err := c.db.BeginTx(ctx, nil)

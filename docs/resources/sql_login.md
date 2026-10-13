@@ -137,6 +137,14 @@ A password is only required to **create** a login, which includes replacing it (
 `sid` or the `server` block); without one the plan fails with *Missing password*. An empty password is always rejected.
 To start managing the password later, add `password_wo` (and bump `password_wo_version` to rotate it).
 
+### Azure SQL Database
+
+Azure SQL Database creates a login with a password and an optional SID only: every login has the default database
+`master` and the default language `us_english`, the password policy is always enforced and passwords do not expire.
+`default_database`, `default_language` and `check_expiration_enabled` can therefore only keep those values there;
+other values fail with an error. `check_policy_enabled` has no effect on Azure SQL Database: it keeps the configured
+value, and an imported login reads `true`. Azure SQL Managed Instance supports all options.
+
 ## Argument Reference
 
 - `name` - (Optional) The name of the login. Exactly one of `name` or `login_name` must be set. Changing this forces a new resource.

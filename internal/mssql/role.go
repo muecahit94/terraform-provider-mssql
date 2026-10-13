@@ -228,10 +228,7 @@ func (c *Client) UpdateDatabaseRole(ctx context.Context, opts UpdateDatabaseRole
 			}
 		} else {
 			// Fallback to existing logic
-			if err := c.UseDatabase(ctx, opts.DatabaseName); err != nil {
-				return nil, err
-			}
-			if _, err := c.ExecContext(ctx, query); err != nil {
+			if err := c.ExecInDatabaseContext(ctx, opts.DatabaseName, query); err != nil {
 				return nil, fmt.Errorf("failed to update database role owner: %w", err)
 			}
 		}
@@ -253,12 +250,7 @@ func (c *Client) DropDatabaseRole(ctx context.Context, databaseName, roleName st
 	}
 
 	// Fallback to existing logic
-	if err := c.UseDatabase(ctx, databaseName); err != nil {
-		return err
-	}
-
-	_, err = c.ExecContext(ctx, query)
-	if err != nil {
+	if err := c.ExecInDatabaseContext(ctx, databaseName, query); err != nil {
 		return fmt.Errorf("failed to drop database role: %w", err)
 	}
 

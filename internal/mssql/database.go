@@ -48,22 +48,45 @@ func quoteString(s string) string {
 	return "N'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-const databaseSelect = `
+// databaseColumns are the columns of sys.databases d read into a Database; %s is the owner expression.
+const databaseColumns = `
 	SELECT
-		database_id,
-		name,
-		ISNULL(collation_name, ''),
-		compatibility_level,
-		recovery_model_desc,
-		ISNULL(SUSER_SNAME(owner_sid), ''),
-		is_auto_close_on,
-		is_auto_shrink_on,
-		page_verify_option_desc,
-		CASE WHEN snapshot_isolation_state IN (1, 2) THEN 1 ELSE 0 END,
-		is_read_committed_snapshot_on,
-		is_query_store_on,
-		is_trustworthy_on
-	FROM sys.databases`
+		d.database_id,
+		d.name,
+		ISNULL(d.collation_name, ''),
+		d.compatibility_level,
+		d.recovery_model_desc,
+		%s,
+		d.is_auto_close_on,
+		d.is_auto_shrink_on,
+		d.page_verify_option_desc,
+		CASE WHEN d.snapshot_isolation_state IN (1, 2) THEN 1 ELSE 0 END,
+		d.is_read_committed_snapshot_on,
+		d.is_query_store_on,
+		d.is_trustworthy_on
+	FROM sys.databases d`
+
+// databaseSelectSQLServer resolves the owner with SUSER_SNAME, as since 1.8.0, which also names a Windows
+// account that has no login.
+var databaseSelectSQLServer = fmt.Sprintf(databaseColumns, "ISNULL(SUSER_SNAME(d.owner_sid), '')")
+
+// databaseSelectAzure resolves the owner by joining the logins: Azure SQL Database rejects SUSER_SNAME(sid)
+// (issue #49) and lists SQL logins only in sys.sql_logins, not in sys.server_principals.
+var databaseSelectAzure = fmt.Sprintf(databaseColumns, "COALESCE(sp.name, sl.name, '')") + `
+	LEFT JOIN sys.server_principals sp ON sp.sid = d.owner_sid
+	LEFT JOIN sys.sql_logins sl ON sl.sid = d.owner_sid`
+
+// databaseSelect returns the query that reads databases on this server.
+func (c *Client) databaseSelect(ctx context.Context) (string, error) {
+	azure, err := c.IsAzureSQLDatabase(ctx)
+	if err != nil {
+		return "", err
+	}
+	if azure {
+		return databaseSelectAzure, nil
+	}
+	return databaseSelectSQLServer, nil
+}
 
 func scanDatabase(s interface{ Scan(dest ...any) error }) (*Database, error) {
 	var db Database
@@ -93,7 +116,11 @@ func (c *Client) fillCollation(ctx context.Context, db *Database) {
 
 // GetDatabase retrieves a database by name.
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error) {
-	db, err := scanDatabase(c.QueryRowContext(ctx, databaseSelect+` WHERE name = @p1`, name))
+	query, err := c.databaseSelect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	db, err := scanDatabase(c.QueryRowContext(ctx, query+` WHERE d.name = @p1`, name))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -107,7 +134,11 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error
 
 // GetDatabaseByID retrieves a database by ID.
 func (c *Client) GetDatabaseByID(ctx context.Context, id int) (*Database, error) {
-	db, err := scanDatabase(c.QueryRowContext(ctx, databaseSelect+` WHERE database_id = @p1`, id))
+	query, err := c.databaseSelect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	db, err := scanDatabase(c.QueryRowContext(ctx, query+` WHERE d.database_id = @p1`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -121,7 +152,11 @@ func (c *Client) GetDatabaseByID(ctx context.Context, id int) (*Database, error)
 
 // ListDatabases retrieves all databases.
 func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
-	rows, err := c.QueryContext(ctx, databaseSelect+` ORDER BY name`)
+	query, err := c.databaseSelect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := c.QueryContext(ctx, query+` ORDER BY d.name`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}

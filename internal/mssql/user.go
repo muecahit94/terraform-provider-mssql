@@ -59,168 +59,96 @@ type User struct {
 	LoginName         string
 	// AuthenticationType is INSTANCE (a login), WINDOWS, NONE (created WITHOUT LOGIN) or EXTERNAL.
 	AuthenticationType string
+
+	sid []byte
 }
 
-// Request a user from a specific database.
+const userSelect = `
+	SELECT
+		dp.principal_id,
+		dp.name,
+		DB_ID() AS database_id,
+		ISNULL(dp.default_schema_name, 'dbo'),
+		dp.type,
+		ISNULL(sp.name, ''),
+		dp.authentication_type_desc,
+		dp.sid
+	FROM sys.database_principals dp
+	LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
+	WHERE dp.type IN (` + userPrincipalTypes + `)`
+
+func scanUser(s interface{ Scan(dest ...any) error }) (*User, error) {
+	var user User
+	if err := s.Scan(&user.PrincipalID, &user.Name, &user.DatabaseID, &user.DefaultSchemaName, &user.Type,
+		&user.LoginName, &user.AuthenticationType, &user.sid); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// fillLoginName looks up the login of a user in the server's own context. In Azure SQL Database a user
+// database does not see the logins, which live in master, so the join in userSelect finds none.
+func (c *Client) fillLoginName(ctx context.Context, user *User) error {
+	if user == nil || user.LoginName != "" || len(user.sid) == 0 || c.db == nil {
+		return nil
+	}
+	err := c.QueryRowContext(ctx, "SELECT name FROM sys.sql_logins WHERE sid = @p1", user.sid).Scan(&user.LoginName)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to look up the login of user %q: %w", user.Name, err)
+	}
+	return nil
+}
+
+// GetUser retrieves a user from a specific database, or nil when it does not exist.
 func (c *Client) GetUser(ctx context.Context, databaseName, userName string) (*User, error) {
-	// Try to get a direct connection to the database first (Azure SQL support)
-	db, err := c.GetDatabaseConnection(ctx, databaseName)
-	if err == nil {
-		defer db.Close()
-		return c.getUserWithDB(ctx, db, userName)
-	}
-
-	// Fallback to USE statement for on-premises SQL Server
-	query := `
-		SELECT
-			dp.principal_id,
-			dp.name,
-			DB_ID() as database_id,
-			ISNULL(dp.default_schema_name, 'dbo'),
-			dp.type,
-			ISNULL(sp.name, ''),
-			dp.authentication_type_desc
-		FROM sys.database_principals dp
-		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
-
-	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, userName)
-	if err != nil {
-		return nil, err
-	}
-
-	return scanUser(row)
-}
-
-func (c *Client) getUserWithDB(ctx context.Context, db *sql.DB, userName string) (*User, error) {
-	query := `
-		SELECT
-			dp.principal_id,
-			dp.name,
-			DB_ID() as database_id,
-			ISNULL(dp.default_schema_name, 'dbo'),
-			dp.type,
-			ISNULL(sp.name, ''),
-			dp.authentication_type_desc
-		FROM sys.database_principals dp
-		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.name = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
-
-	row := db.QueryRowContext(ctx, query, userName)
-	return scanUser(row)
-}
-
-func scanUser(row *sql.Row) (*User, error) {
-	var user User
-	err := row.Scan(
-		&user.PrincipalID,
-		&user.Name,
-		&user.DatabaseID,
-		&user.DefaultSchemaName,
-		&user.Type,
-		&user.LoginName,
-		&user.AuthenticationType,
-	)
+	var user *User
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		var err error
+		user, err = scanUser(db.QueryRowContext(ctx, userSelect+` AND dp.name = @p1`, userName))
+		return err
+	})
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return &user, nil
-}
-
-// GetUserByID retrieves a user by principal ID from a specific database.
-func (c *Client) GetUserByID(ctx context.Context, databaseName string, principalID int) (*User, error) {
-	query := `
-		SELECT
-			dp.principal_id,
-			dp.name,
-			DB_ID() as database_id,
-			ISNULL(dp.default_schema_name, 'dbo'),
-			dp.type,
-			ISNULL(sp.name, ''),
-			dp.authentication_type_desc
-		FROM sys.database_principals dp
-		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.principal_id = @p1 AND dp.type IN (` + userPrincipalTypes + `)`
-
-	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, principalID)
-	if err != nil {
+	if err := c.fillLoginName(ctx, user); err != nil {
 		return nil, err
 	}
-
-	var user User
-	err = row.Scan(
-		&user.PrincipalID,
-		&user.Name,
-		&user.DatabaseID,
-		&user.DefaultSchemaName,
-		&user.Type,
-		&user.LoginName,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-
-	return &user, nil
+	return user, nil
 }
 
 // ListUsers retrieves all users from a specific database.
 func (c *Client) ListUsers(ctx context.Context, databaseName string) ([]User, error) {
-	// Get a dedicated connection from the pool
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
-		return nil, fmt.Errorf("failed to switch database context: %w", err)
-	}
-
-	query := `
-		SELECT
-			dp.principal_id,
-			dp.name,
-			DB_ID() as database_id,
-			ISNULL(dp.default_schema_name, 'dbo'),
-			dp.type,
-			ISNULL(sp.name, ''),
-			dp.authentication_type_desc
-		FROM sys.database_principals dp
-		LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
-		WHERE dp.type IN (` + userPrincipalTypes + `)
-		ORDER BY dp.name`
-
-	rows, err := conn.QueryContext(ctx, query)
+	var users []User
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		rows, err := db.QueryContext(ctx, userSelect+` ORDER BY dp.name`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			user, err := scanUser(rows)
+			if err != nil {
+				return err
+			}
+			users = append(users, *user)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
-	defer rows.Close()
-
-	var users []User
-	for rows.Next() {
-		var user User
-		if err := rows.Scan(
-			&user.PrincipalID,
-			&user.Name,
-			&user.DatabaseID,
-			&user.DefaultSchemaName,
-			&user.Type,
-			&user.LoginName,
-			&user.AuthenticationType,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan user: %w", err)
+	for i := range users {
+		if err := c.fillLoginName(ctx, &users[i]); err != nil {
+			return nil, err
 		}
-		users = append(users, user)
 	}
-
-	return users, rows.Err()
+	return users, nil
 }
 
 // AuthenticationTypeNone is the authentication type of a user created WITHOUT LOGIN.
@@ -235,7 +163,11 @@ func alterUserLoginStatement(userName, loginName string) string {
 // role memberships stay. It also fixes an orphaned user, whose SID matches no login. SQL Server cannot
 // do it for a user that was created WITHOUT LOGIN.
 func (c *Client) RelinkUser(ctx context.Context, databaseName, userName, loginName string) error {
-	if _, err := c.ExecContext(ctx, "EXEC "+quoteName(databaseName)+".sys.sp_executesql @p1", alterUserLoginStatement(userName, loginName)); err != nil {
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		_, err := db.ExecContext(ctx, alterUserLoginStatement(userName, loginName))
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("failed to map the user to the login: %w", err)
 	}
 	return nil
@@ -390,7 +322,7 @@ func (c *Client) CreateAzureADUser(ctx context.Context, opts CreateAzureADUserOp
 		return nil, fmt.Errorf("failed to create Azure AD user: %w", err)
 	}
 
-	return c.getUserWithDB(ctx, db, opts.UserName)
+	return c.GetUser(ctx, opts.DatabaseName, opts.UserName)
 }
 
 // CreateAzureADServicePrincipalOptions contains options for creating an Azure AD service principal.
@@ -434,5 +366,5 @@ func (c *Client) CreateAzureADServicePrincipal(ctx context.Context, opts CreateA
 		return nil, fmt.Errorf("failed to create Azure AD service principal: %w", err)
 	}
 
-	return c.getUserWithDB(ctx, db, opts.Name)
+	return c.GetUser(ctx, opts.DatabaseName, opts.Name)
 }
