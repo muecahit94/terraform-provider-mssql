@@ -6,6 +6,7 @@ package mssql
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 )
@@ -27,90 +28,67 @@ type ScriptState struct {
 	State map[string]string
 }
 
-// ExecuteScript executes a SQL script and returns the results as a map.
+// rowValues converts the current row to strings; NULL becomes an empty string.
+func rowValues(rows *sql.Rows, columns []string) (map[string]string, error) {
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range values {
+		valuePtrs[i] = &values[i]
+	}
+	if err := rows.Scan(valuePtrs...); err != nil {
+		return nil, fmt.Errorf("failed to scan row: %w", err)
+	}
+
+	row := make(map[string]string, len(columns))
+	for i, col := range columns {
+		switch v := values[i].(type) {
+		case nil:
+			row[col] = ""
+		case []byte:
+			row[col] = string(v)
+		default:
+			row[col] = fmt.Sprintf("%v", v)
+		}
+	}
+	return row, nil
+}
+
+// ExecuteScript executes a SQL script and returns the first row of its result as a map.
+// The script runs on one connection, so a database context set inside it lasts for the whole script.
 func (c *Client) ExecuteScript(ctx context.Context, databaseName, script string) (map[string]string, error) {
-	// Use a dedicated connection so that the USE statement and the script
-	// execution are guaranteed to run on the same connection. This prevents
-	// the database context from being lost when the pool hands out a
-	// different connection (e.g. after a server-side connection reset caused
-	// by ALTER DATABASE … WITH ROLLBACK IMMEDIATE).
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	if databaseName != "" {
-		if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
-			return nil, fmt.Errorf("failed to switch database context: %w", err)
-		}
-	}
-
-	rows, err := conn.QueryContext(ctx, script)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute script: %w", err)
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
-	}
-
 	result := make(map[string]string)
-
-	if rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		rows, err := db.QueryContext(ctx, script)
+		if err != nil {
+			return fmt.Errorf("failed to execute script: %w", err)
 		}
+		defer rows.Close()
 
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+		columns, err := rows.Columns()
+		if err != nil {
+			return fmt.Errorf("failed to get columns: %w", err)
 		}
-
-		for i, col := range columns {
-			if values[i] != nil {
-				switch v := values[i].(type) {
-				case []byte:
-					result[col] = string(v)
-				default:
-					result[col] = fmt.Sprintf("%v", v)
-				}
-			} else {
-				result[col] = ""
+		if rows.Next() {
+			if result, err = rowValues(rows, columns); err != nil {
+				return err
 			}
 		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return result, rows.Err()
+	return result, nil
 }
 
 // ExecuteScriptNoResult executes a SQL script without returning results.
 func (c *Client) ExecuteScriptNoResult(ctx context.Context, databaseName, script string) error {
-	// Use a dedicated connection so that the USE statement and the script
-	// execution are guaranteed to run on the same connection. This prevents
-	// the database context from being lost when the pool hands out a
-	// different connection (e.g. after a server-side connection reset caused
-	// by ALTER DATABASE … WITH ROLLBACK IMMEDIATE).
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	if databaseName != "" {
-		if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
-			return fmt.Errorf("failed to switch database context: %w", err)
+	return c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		if _, err := db.ExecContext(ctx, script); err != nil {
+			return fmt.Errorf("failed to execute script: %w", err)
 		}
-	}
-
-	if _, err := conn.ExecContext(ctx, script); err != nil {
-		return fmt.Errorf("failed to execute script: %w", err)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // GenerateScriptID generates a unique ID for a script based on its content.
@@ -127,54 +105,28 @@ type QueryResult struct {
 
 // ExecuteQuery executes a query and returns all results.
 func (c *Client) ExecuteQuery(ctx context.Context, databaseName, query string) (*QueryResult, error) {
-	if databaseName != "" {
-		if err := c.UseDatabase(ctx, databaseName); err != nil {
-			return nil, err
+	result := &QueryResult{Rows: []map[string]string{}}
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("failed to execute query: %w", err)
 		}
-	}
+		defer rows.Close()
 
-	rows, err := c.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	result := &QueryResult{
-		Columns: columns,
-		Rows:    []map[string]string{},
-	}
-
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
+		if result.Columns, err = rows.Columns(); err != nil {
+			return fmt.Errorf("failed to get columns: %w", err)
 		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		row := make(map[string]string)
-		for i, col := range columns {
-			if values[i] != nil {
-				switch v := values[i].(type) {
-				case []byte:
-					row[col] = string(v)
-				default:
-					row[col] = fmt.Sprintf("%v", v)
-				}
-			} else {
-				row[col] = ""
+		for rows.Next() {
+			row, err := rowValues(rows, result.Columns)
+			if err != nil {
+				return err
 			}
+			result.Rows = append(result.Rows, row)
 		}
-		result.Rows = append(result.Rows, row)
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return result, rows.Err()
+	return result, nil
 }

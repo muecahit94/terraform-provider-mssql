@@ -69,18 +69,16 @@ func RevokeObjectPermissionStatement(schemaName, objectName, columnName, princip
 	return "REVOKE " + permission + " ON " + objectSecurable(schemaName, objectName, columnName) + " FROM " + quoteName(principalName) + " CASCADE", nil
 }
 
-// execInDatabase runs a statement in the context of a database without a USE statement, which
-// would leave the pooled connection in another database.
+// execInDatabase runs a statement in the context of a database.
 func (c *Client) execInDatabase(ctx context.Context, database, statement string) error {
-	_, err := c.ExecContext(ctx, "EXEC "+quoteName(database)+".sys.sp_executesql @p1", statement)
-	return err
+	return c.withDatabase(ctx, database, func(db sqlRunner) error {
+		_, err := db.ExecContext(ctx, statement)
+		return err
+	})
 }
 
-// objectPermissionQuery selects the permissions of class OBJECT_OR_COLUMN. The catalog views are
-// qualified with the database name, so no USE is needed and the database collation applies.
-func objectPermissionQuery(database string) string {
-	db := quoteName(database)
-	return `
+// objectPermissionQuery selects the permissions of class OBJECT_OR_COLUMN in the current database.
+const objectPermissionQuery = `
 		SELECT
 			g.name,
 			p.permission_name,
@@ -88,13 +86,12 @@ func objectPermissionQuery(database string) string {
 			o.name,
 			ISNULL(col.name, ''),
 			p.state
-		FROM ` + db + `.sys.database_permissions p
-		INNER JOIN ` + db + `.sys.database_principals g ON g.principal_id = p.grantee_principal_id
-		INNER JOIN ` + db + `.sys.all_objects o ON o.object_id = p.major_id
-		INNER JOIN ` + db + `.sys.schemas s ON s.schema_id = o.schema_id
-		LEFT JOIN ` + db + `.sys.all_columns col ON col.object_id = p.major_id AND col.column_id = p.minor_id AND p.minor_id > 0
+		FROM sys.database_permissions p
+		INNER JOIN sys.database_principals g ON g.principal_id = p.grantee_principal_id
+		INNER JOIN sys.all_objects o ON o.object_id = p.major_id
+		INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+		LEFT JOIN sys.all_columns col ON col.object_id = p.major_id AND col.column_id = p.minor_id AND p.minor_id > 0
 		WHERE p.class = 1`
-}
 
 // GetObjectPermission retrieves one permission, or nil when it does not exist. A DENY is returned
 // with State "D": the caller decides what to do with it, because granting over a DENY removes it.
@@ -104,16 +101,18 @@ func (c *Client) GetObjectPermission(ctx context.Context, database, schemaName, 
 		return nil, err
 	}
 
-	query := objectPermissionQuery(database) + `
+	query := objectPermissionQuery + `
 			AND g.name = @p1
 			AND p.permission_name = @p2
 			AND s.name = @p3
 			AND o.name = @p4
 			AND ISNULL(col.name, '') = @p5`
-	row := c.QueryRowContext(ctx, query, principalName, permission, schemaName, objectName, columnName)
 
 	var perm ObjectPermission
-	err = row.Scan(&perm.PrincipalName, &perm.PermissionName, &perm.SchemaName, &perm.ObjectName, &perm.ColumnName, &perm.State)
+	err = c.withDatabase(ctx, database, func(db sqlRunner) error {
+		return db.QueryRowContext(ctx, query, principalName, permission, schemaName, objectName, columnName).
+			Scan(&perm.PrincipalName, &perm.PermissionName, &perm.SchemaName, &perm.ObjectName, &perm.ColumnName, &perm.State)
+	})
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

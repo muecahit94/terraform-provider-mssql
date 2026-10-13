@@ -29,25 +29,21 @@ func (c *Client) GetSchema(ctx context.Context, databaseName, schemaName string)
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		WHERE s.name = @p1`
 
-	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, schemaName)
-	if err != nil {
-		return nil, err
-	}
+	return c.getSchema(ctx, databaseName, query, schemaName)
+}
 
+// getSchema reads one schema in the context of a database, or nil when it does not exist.
+func (c *Client) getSchema(ctx context.Context, databaseName, query string, arg any) (*Schema, error) {
 	var schema Schema
-	err = row.Scan(
-		&schema.SchemaID,
-		&schema.Name,
-		&schema.OwnerName,
-		&schema.DatabaseID,
-	)
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		return db.QueryRowContext(ctx, query, arg).Scan(&schema.SchemaID, &schema.Name, &schema.OwnerName, &schema.DatabaseID)
+	})
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema: %w", err)
 	}
-
 	return &schema, nil
 }
 
@@ -63,42 +59,11 @@ func (c *Client) GetSchemaByID(ctx context.Context, databaseName string, schemaI
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		WHERE s.schema_id = @p1`
 
-	row, err := c.QueryRowInDatabaseContext(ctx, databaseName, query, schemaID)
-	if err != nil {
-		return nil, err
-	}
-
-	var schema Schema
-	err = row.Scan(
-		&schema.SchemaID,
-		&schema.Name,
-		&schema.OwnerName,
-		&schema.DatabaseID,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get schema: %w", err)
-	}
-
-	return &schema, nil
+	return c.getSchema(ctx, databaseName, query, schemaID)
 }
 
 // ListSchemas retrieves all schemas from a database.
 func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema, error) {
-	// Get a dedicated connection from the pool
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
-		return nil, fmt.Errorf("failed to switch database context: %w", err)
-	}
-
 	query := `
 		SELECT
 			s.schema_id,
@@ -109,27 +74,24 @@ func (c *Client) ListSchemas(ctx context.Context, databaseName string) ([]Schema
 		INNER JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
 		ORDER BY s.name`
 
-	rows, err := conn.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list schemas: %w", err)
-	}
-	defer rows.Close()
-
 	var schemas []Schema
-	for rows.Next() {
-		var schema Schema
-		if err := rows.Scan(
-			&schema.SchemaID,
-			&schema.Name,
-			&schema.OwnerName,
-			&schema.DatabaseID,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan schema: %w", err)
+	err := c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("failed to list schemas: %w", err)
 		}
-		schemas = append(schemas, schema)
-	}
+		defer rows.Close()
 
-	return schemas, rows.Err()
+		for rows.Next() {
+			var schema Schema
+			if err := rows.Scan(&schema.SchemaID, &schema.Name, &schema.OwnerName, &schema.DatabaseID); err != nil {
+				return fmt.Errorf("failed to scan schema: %w", err)
+			}
+			schemas = append(schemas, schema)
+		}
+		return rows.Err()
+	})
+	return schemas, err
 }
 
 // CreateSchemaOptions contains options for creating a schema.

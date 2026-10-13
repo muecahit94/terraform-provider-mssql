@@ -52,6 +52,25 @@ type Client struct {
 	port     int
 	config   *Config // Store config for creating database-specific connections
 	pool     *ClientPool
+
+	engineMu      sync.Mutex
+	engineEdition int // 0 until detected
+}
+
+// engineEditionAzureSQLDatabase is SERVERPROPERTY('EngineEdition') of Azure SQL Database.
+const engineEditionAzureSQLDatabase = 5
+
+// IsAzureSQLDatabase reports whether the server is Azure SQL Database, whose T-SQL lacks some server-level
+// functions and options. Managed Instance (edition 8) behaves like SQL Server.
+func (c *Client) IsAzureSQLDatabase(ctx context.Context) (bool, error) {
+	c.engineMu.Lock()
+	defer c.engineMu.Unlock()
+	if c.engineEdition == 0 {
+		if err := c.db.QueryRowContext(ctx, "SELECT CAST(SERVERPROPERTY('EngineEdition') AS int)").Scan(&c.engineEdition); err != nil {
+			return false, fmt.Errorf("failed to detect the SQL Server edition: %w", err)
+		}
+	}
+	return c.engineEdition == engineEditionAzureSQLDatabase, nil
 }
 
 // Config holds the configuration for connecting to SQL Server.
@@ -411,33 +430,43 @@ func (c *Client) QueryRowContext(ctx context.Context, query string, args ...inte
 	return c.db.QueryRowContext(ctx, query, args...)
 }
 
-// UseDatabase switches the connection to use the specified database.
-func (c *Client) UseDatabase(ctx context.Context, databaseName string) error {
-	_, err := c.db.ExecContext(ctx, "USE "+quoteName(databaseName))
-	return err
+// sqlRunner is implemented by *sql.DB, *sql.Conn and *sql.Tx.
+type sqlRunner interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// ExecInDatabaseContext executes a query in the context of a specific database.
-// This uses a dedicated connection to ensure the USE statement persists for the query.
-func (c *Client) ExecInDatabaseContext(ctx context.Context, databaseName, query string) error {
-	// Get a dedicated connection from the pool
+// withDatabase runs fn on one connection in the context of a database (the default database when the
+// name is empty). It prefers a direct connection to the database, because Azure SQL Database supports
+// neither USE nor three-part names across databases; it falls back to a pooled connection switched with USE.
+func (c *Client) withDatabase(ctx context.Context, databaseName string, fn func(db sqlRunner) error) error {
+	if databaseName != "" {
+		if db, err := c.GetDatabaseConnection(ctx, databaseName); err == nil {
+			defer db.Close()
+			return fn(db)
+		}
+	}
+
 	conn, err := c.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get database connection: %w", err)
 	}
 	defer conn.Close()
-
-	// Switch to the target database
-	if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
-		return fmt.Errorf("failed to switch database context: %w", err)
+	if databaseName != "" {
+		if _, err := conn.ExecContext(ctx, "USE "+quoteName(databaseName)); err != nil {
+			return fmt.Errorf("failed to switch database context: %w", err)
+		}
 	}
+	return fn(conn)
+}
 
-	// Execute the query in the correct context
-	if _, err := conn.ExecContext(ctx, query); err != nil {
+// ExecInDatabaseContext executes a query in the context of a specific database.
+func (c *Client) ExecInDatabaseContext(ctx context.Context, databaseName, query string) error {
+	return c.withDatabase(ctx, databaseName, func(db sqlRunner) error {
+		_, err := db.ExecContext(ctx, query)
 		return err
-	}
-
-	return nil
+	})
 }
 
 // QueryRowInDatabaseContext executes a query in the context of a specific database and returns a row.

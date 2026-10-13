@@ -5,8 +5,54 @@ package mssql
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 )
+
+// Azure SQL Database rejects SUSER_SNAME/SUSER_SID with an argument (issue #49) and three-part names
+// that point into another database.
+var azureIncompatible = regexp.MustCompile(`(?i)SUSER_S(NAME|ID)\s*\(\s*[^)\s]|\]\.sys\.`)
+
+func TestQueriesRunOnAzureSQLDatabase(t *testing.T) {
+	queries := map[string]string{
+		"databaseSelectAzure":   databaseSelectAzure,
+		"objectPermissionQuery": objectPermissionQuery,
+		"userSelect":            userSelect,
+	}
+	for name, query := range queries {
+		if m := azureIncompatible.FindString(query); m != "" {
+			t.Errorf("%s uses %q, which Azure SQL Database rejects", name, m)
+		}
+	}
+	// Azure SQL Database lists SQL logins only in sys.sql_logins.
+	if !strings.Contains(databaseSelectAzure, "sys.sql_logins") {
+		t.Error("databaseSelectAzure must resolve the owner through sys.sql_logins")
+	}
+}
+
+// The owner on SQL Server is read as since 1.8.0, so that upgrades show no diff.
+func TestDatabaseSelectSQLServerKeepsSUSERSNAME(t *testing.T) {
+	if !strings.Contains(databaseSelectSQLServer, "SUSER_SNAME(d.owner_sid)") {
+		t.Errorf("databaseSelectSQLServer = %q", databaseSelectSQLServer)
+	}
+	if strings.Contains(databaseSelectSQLServer, "%") || strings.Contains(databaseSelectAzure, "%") {
+		t.Error("the owner expression was not substituted")
+	}
+}
+
+func TestAzureIncompatiblePattern(t *testing.T) {
+	for _, bad := range []string{"SUSER_SNAME(owner_sid)", "suser_sname( d.owner_sid )", "SUSER_SID('x')", "FROM [db].sys.objects"} {
+		if !azureIncompatible.MatchString(bad) {
+			t.Errorf("pattern must catch %q", bad)
+		}
+	}
+	for _, good := range []string{"SUSER_SNAME()", "FROM sys.databases d", "LEFT JOIN sys.server_principals sp"} {
+		if azureIncompatible.MatchString(good) {
+			t.Errorf("pattern must not flag %q", good)
+		}
+	}
+}
 
 func TestQuoteName(t *testing.T) {
 	tests := []struct{ in, want string }{

@@ -189,41 +189,71 @@ func (c *Client) CreateSQLLogin(ctx context.Context, opts CreateSQLLoginOptions)
 		return nil, fmt.Errorf("refusing to create SQL login %q with an empty password", opts.Name)
 	}
 
-	defaultDB := opts.DefaultDatabase
-	if defaultDB == "" {
-		defaultDB = "master"
-	}
-
-	query := fmt.Sprintf(`
-		CREATE LOGIN %s WITH PASSWORD = %s,
-		DEFAULT_DATABASE = %s,
-		CHECK_EXPIRATION = %s,
-		CHECK_POLICY = %s`,
-		quoteName(opts.Name),
-		quoteString(opts.Password),
-		quoteName(defaultDB),
-		boolToOnOff(opts.CheckExpirationEnabled),
-		boolToOnOff(opts.CheckPolicyEnabled),
-	)
-
-	if opts.SID != "" {
-		normSID, err := NormalizeSID(opts.SID)
-		if err != nil {
-			return nil, err
-		}
-		query += fmt.Sprintf(", SID = %s", normSID)
-	}
-
-	if opts.DefaultLanguage != "" {
-		query += ", DEFAULT_LANGUAGE = " + quoteName(opts.DefaultLanguage)
-	}
-
-	_, err := c.ExecContext(ctx, query)
+	azure, err := c.IsAzureSQLDatabase(ctx)
 	if err != nil {
+		return nil, err
+	}
+	query, err := createLoginStatement(opts, azure)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := c.ExecContext(ctx, query); err != nil {
 		return nil, fmt.Errorf("failed to create SQL login: %w", err)
 	}
 
 	return c.GetSQLLogin(ctx, opts.Name)
+}
+
+// azureLoginOptionsError rejects login options that Azure SQL Database does not support: there every login
+// has the default database master and the default language us_english, and passwords do not expire.
+// CHECK_POLICY is not checked: Azure always enforces the password policy, so the setting has no effect.
+func azureLoginOptionsError(defaultDatabase, defaultLanguage *string, checkExpiration *bool) error {
+	var unsupported []string
+	if defaultDatabase != nil && *defaultDatabase != "" && !strings.EqualFold(*defaultDatabase, "master") {
+		unsupported = append(unsupported, "default_database (only master)")
+	}
+	if defaultLanguage != nil && *defaultLanguage != "" && !strings.EqualFold(*defaultLanguage, azureDefaultLanguage) {
+		unsupported = append(unsupported, "default_language (only "+azureDefaultLanguage+")")
+	}
+	if checkExpiration != nil && *checkExpiration {
+		unsupported = append(unsupported, "check_expiration_enabled = true")
+	}
+	if len(unsupported) > 0 {
+		return fmt.Errorf("these login options are not supported on Azure SQL Database: %s", strings.Join(unsupported, ", "))
+	}
+	return nil
+}
+
+// azureDefaultLanguage is the default language every Azure SQL Database login has.
+const azureDefaultLanguage = "us_english"
+
+// createLoginStatement builds CREATE LOGIN. Azure SQL Database accepts only PASSWORD and SID.
+func createLoginStatement(opts CreateSQLLoginOptions, azure bool) (string, error) {
+	query := "CREATE LOGIN " + quoteName(opts.Name) + " WITH PASSWORD = " + quoteString(opts.Password)
+	if opts.SID != "" {
+		normSID, err := NormalizeSID(opts.SID)
+		if err != nil {
+			return "", err
+		}
+		query += ", SID = " + normSID
+	}
+
+	if azure {
+		return query, azureLoginOptionsError(&opts.DefaultDatabase, &opts.DefaultLanguage, &opts.CheckExpirationEnabled)
+	}
+
+	defaultDB := opts.DefaultDatabase
+	if defaultDB == "" {
+		defaultDB = "master"
+	}
+	query += ", DEFAULT_DATABASE = " + quoteName(defaultDB) +
+		", CHECK_EXPIRATION = " + boolToOnOff(opts.CheckExpirationEnabled) +
+		", CHECK_POLICY = " + boolToOnOff(opts.CheckPolicyEnabled)
+	if opts.DefaultLanguage != "" {
+		query += ", DEFAULT_LANGUAGE = " + quoteName(opts.DefaultLanguage)
+	}
+	return query, nil
 }
 
 // UpdateSQLLoginOptions contains options for updating a SQL login.
@@ -239,6 +269,18 @@ type UpdateSQLLoginOptions struct {
 
 // UpdateSQLLogin updates an existing SQL login.
 func (c *Client) UpdateSQLLogin(ctx context.Context, opts UpdateSQLLoginOptions) (*SQLLogin, error) {
+	azure, err := c.IsAzureSQLDatabase(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if azure {
+		// The supported values are the ones every login already has, so there is nothing to alter.
+		if err := azureLoginOptionsError(opts.DefaultDatabase, opts.DefaultLanguage, opts.CheckExpirationEnabled); err != nil {
+			return nil, err
+		}
+		opts.DefaultDatabase, opts.DefaultLanguage, opts.CheckExpirationEnabled, opts.CheckPolicyEnabled = nil, nil, nil, nil
+	}
+
 	if opts.Password != nil {
 		query := "ALTER LOGIN " + quoteName(opts.Name) + " WITH PASSWORD = " + quoteString(*opts.Password)
 		if _, err := c.ExecContext(ctx, query); err != nil {

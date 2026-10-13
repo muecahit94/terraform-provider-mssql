@@ -118,6 +118,10 @@ func applyDatabase(data *DatabaseResourceModel, db *mssql.Database) {
 	data.ReadCommittedSnapshot = types.BoolValue(db.ReadCommittedSnapshot)
 	data.QueryStore = types.BoolValue(db.QueryStore)
 	data.Trustworthy = types.BoolValue(db.Trustworthy)
+	// States written before 1.8.0 have no deletion_protection; its default keeps the upgrade plan empty.
+	if data.DeletionProtection.IsNull() || data.DeletionProtection.IsUnknown() {
+		data.DeletionProtection = types.BoolValue(false)
+	}
 }
 
 // Metadata returns the resource type name.

@@ -5,6 +5,7 @@
 #
 # Environment Variables:
 #   SKIP_INFRA_DESTROY=1  - Skip infrastructure destruction (useful for debugging)
+#   DEVELOPER_EMAIL       - UPN of an Entra ID user to create as database user; its checks are skipped when unset
 
 set -e
 
@@ -38,6 +39,20 @@ SQL_USER=""
 SQL_PASSWORD=""
 AZURE_SUBSCRIPTION_ID=""
 AZURE_TENANT_ID=""
+TF_VARS=()
+
+# set_tf_vars builds the variables of the mssql_resources configuration; extra arguments are appended.
+set_tf_vars() {
+    TF_VARS=(
+        -var="sql_hostname=$SQL_HOST"
+        -var="database_name=$DB_NAME"
+        -var="mi_name=$MI_NAME"
+        -var="mi_object_id=$MI_OBJECT_ID"
+        -var="azure_tenant_id=$AZURE_TENANT_ID"
+        -var="developer_email=${DEVELOPER_EMAIL:-}"
+        "$@"
+    )
+}
 
 # Helper functions
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -95,12 +110,8 @@ cleanup_all() {
     # Try to destroy resources if we have the variables
     if [ -n "$SQL_HOST" ]; then
         cd "$RESOURCES_DIR" 2>/dev/null || true
-        terraform destroy -auto-approve \
-            -var="sql_hostname=$SQL_HOST" \
-            -var="database_name=$DB_NAME" \
-            -var="mi_name=$MI_NAME" \
-            -var="mi_object_id=$MI_OBJECT_ID" \
-            -var="azure_tenant_id=$AZURE_TENANT_ID" 2>/dev/null || true
+        set_tf_vars
+        terraform destroy -auto-approve "${TF_VARS[@]}" 2>/dev/null || true
     fi
 
     if [ -n "$AZURE_SUBSCRIPTION_ID" ] && [ -z "$SKIP_INFRA_DESTROY" ]; then
@@ -127,6 +138,27 @@ run_sql() {
     else
         echo "Error: No SQL CLI tool found (sqlcmd or mssql-cli)" >&2
         return 1
+    fi
+}
+
+# sql_value prints the first column of the first row of a query, without headers.
+sql_value() {
+    local db="$1"
+    local query="$2"
+    SQLCMDPASSWORD="$SQL_PASSWORD" sqlcmd -S "$SQL_HOST" -U "$SQL_USER" -d "$db" -C -h -1 -W \
+        -Q "SET NOCOUNT ON; $query" 2>/dev/null | sed '/^$/d' | head -1 | tr -d '\r'
+}
+
+# check_eq records a test that passes when the actual value equals the expected one.
+check_eq() {
+    local name="$1"
+    local actual="$2"
+    local expected="$3"
+    if [ "$actual" == "$expected" ]; then
+        log_record "$name" "PASS"
+    else
+        log_error "  expected [$expected], got [$actual]"
+        log_record "$name" "FAIL"
     fi
 }
 
@@ -244,13 +276,9 @@ main() {
     log_info "Deploying MSSQL Resources..."
     cd "$RESOURCES_DIR"
     terraform init >/dev/null
+    set_tf_vars
 
-    if terraform apply -auto-approve \
-        -var="sql_hostname=$SQL_HOST" \
-        -var="database_name=$DB_NAME" \
-        -var="mi_name=$MI_NAME" \
-        -var="mi_object_id=$MI_OBJECT_ID" \
-        -var="azure_tenant_id=$AZURE_TENANT_ID"; then
+    if terraform apply -auto-approve "${TF_VARS[@]}"; then
         log_record "MSSQL Resources Deployment" "PASS"
     else
         log_record "MSSQL Resources Deployment" "FAIL"
@@ -258,12 +286,7 @@ main() {
 
     # Idempotency check
     log_info "Checking idempotency..."
-    if terraform plan -detailed-exitcode \
-        -var="sql_hostname=$SQL_HOST" \
-        -var="database_name=$DB_NAME" \
-        -var="mi_name=$MI_NAME" \
-        -var="mi_object_id=$MI_OBJECT_ID" \
-        -var="azure_tenant_id=$AZURE_TENANT_ID" >/dev/null 2>&1; then
+    if terraform plan -detailed-exitcode "${TF_VARS[@]}" >/dev/null 2>&1; then
         log_record "MSSQL Resources: Idempotency" "PASS"
     else
         log_record "MSSQL Resources: Idempotency" "FAIL"
@@ -308,22 +331,70 @@ main() {
         log_record "SQL Verify: MI Role Membership (Option 2: role_member)" "FAIL"
     fi
 
-    # Check developer_role exists
-    if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
-        "SELECT 1 FROM sys.database_principals WHERE name = 'developer_role' AND type = 'R'" | grep -v "Executed in" | grep -q "1"; then
-        log_record "SQL Verify: Developer Role" "PASS"
+    # Developer user with inline roles (Option 1), only when DEVELOPER_EMAIL is set
+    if [ -z "${DEVELOPER_EMAIL:-}" ]; then
+        log_record "SQL Verify: Developer Role (set DEVELOPER_EMAIL)" "SKIP"
+        log_record "SQL Verify: Developer Role Membership (set DEVELOPER_EMAIL)" "SKIP"
     else
-        log_record "SQL Verify: Developer Role" "FAIL"
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_principals WHERE name = 'developer_role' AND type = 'R'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "SQL Verify: Developer Role" "PASS"
+        else
+            log_record "SQL Verify: Developer Role" "FAIL"
+        fi
+
+        if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'developer_role' AND m.name = '$DEVELOPER_EMAIL'" | grep -v "Executed in" | grep -q "1"; then
+            log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "PASS"
+        else
+            log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "FAIL"
+        fi
     fi
 
-    # Check Developer user in developer_role (via OPTION 1: inline roles)
-    DEVELOPER_EMAIL="${DEVELOPER_EMAIL:-}" # Get from env or leave empty
-    if [ -n "$DEVELOPER_EMAIL" ] || run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
-        "SELECT 1 FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE r.name = 'developer_role'" | grep -v "Executed in" | grep -q "1"; then
-        log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "PASS"
+    # Azure SQL Database specifics (issue #49 and the features of 1.8)
+    check_eq "Data Source: mssql_database owner_name (issue #49)" \
+        "$(terraform -chdir="$RESOURCES_DIR" output -raw database_owner 2>/dev/null)" "$SQL_USER"
+    check_eq "Data Source: mssql_databases lists the databases" \
+        "$(terraform -chdir="$RESOURCES_DIR" output -raw database_count 2>/dev/null)" \
+        "$(sql_value master "SELECT COUNT(*) FROM sys.databases")"
+    check_eq "SQL Verify: SQL logins created in master" \
+        "$(sql_value master "SELECT COUNT(*) FROM sys.sql_logins WHERE name IN ('e2e_login_a', 'e2e_login_b')")" "2"
+    LOGIN_A_SID=$(sql_value master "SELECT CONVERT(varchar(100), sid, 1) FROM sys.sql_logins WHERE name = 'e2e_login_a'")
+    LOGIN_B_SID=$(sql_value master "SELECT CONVERT(varchar(100), sid, 1) FROM sys.sql_logins WHERE name = 'e2e_login_b'")
+    check_eq "SQL Verify: SQL user mapped to its login" \
+        "$(sql_value "$DB_NAME" "SELECT CONVERT(varchar(100), sid, 1) FROM sys.database_principals WHERE name = 'e2e_sql_user'")" "$LOGIN_A_SID"
+    check_eq "SQL Verify: user without login" \
+        "$(sql_value "$DB_NAME" "SELECT authentication_type_desc FROM sys.database_principals WHERE name = 'e2e_no_login'")" "NONE"
+    check_eq "SQL Verify: table created by mssql_script" \
+        "$(sql_value "$DB_NAME" "SELECT COUNT(*) FROM sys.tables WHERE name = 'e2e_orders'")" "1"
+    check_eq "SQL Verify: object and column permissions" \
+        "$(sql_value "$DB_NAME" "SELECT COUNT(*) FROM sys.database_permissions p JOIN sys.database_principals u ON u.principal_id = p.grantee_principal_id LEFT JOIN sys.columns c ON c.object_id = p.major_id AND c.column_id = p.minor_id WHERE p.class = 1 AND u.name = 'e2e_sql_user' AND p.major_id = OBJECT_ID('dbo.e2e_orders') AND ((p.permission_name = 'SELECT' AND p.minor_id = 0) OR (p.permission_name = 'UPDATE' AND c.name = 'total'))")" \
+        "2"
+
+    # Map the user to the other login in place (ALTER USER WITH LOGIN)
+    log_info "Test: changing the login of a SQL user in place..."
+    USER_ID_BEFORE=$(sql_value "$DB_NAME" "SELECT principal_id FROM sys.database_principals WHERE name = 'e2e_sql_user'")
+    set_tf_vars -var="sql_user_login=e2e_login_b"
+    relink_plan=$(terraform -chdir="$RESOURCES_DIR" plan -no-color "${TF_VARS[@]}" 2>&1)
+    if echo "$relink_plan" | grep -q "mssql_sql_user.app will be updated in-place" && ! echo "$relink_plan" | grep -q "must be replaced"; then
+        log_record "Relink: login change planned in place" "PASS"
     else
-        log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "FAIL"
+        log_record "Relink: login change planned in place" "FAIL"
     fi
+    if terraform -chdir="$RESOURCES_DIR" apply -auto-approve "${TF_VARS[@]}" >/dev/null 2>&1; then
+        log_record "Relink: apply" "PASS"
+    else
+        log_record "Relink: apply" "FAIL"
+    fi
+    check_eq "Relink: same user, SID of the new login" \
+        "$(sql_value "$DB_NAME" "SELECT CONCAT(principal_id, ' ', CONVERT(varchar(100), sid, 1)) FROM sys.database_principals WHERE name = 'e2e_sql_user'")" \
+        "$USER_ID_BEFORE $LOGIN_B_SID"
+    if terraform -chdir="$RESOURCES_DIR" plan -detailed-exitcode "${TF_VARS[@]}" >/dev/null 2>&1; then
+        log_record "Relink: idempotency" "PASS"
+    else
+        log_record "Relink: idempotency" "FAIL"
+    fi
+    set_tf_vars
 
     # =========================================================================
     # PHASE 5: DRIFT RECOVERY TESTS
@@ -334,12 +405,7 @@ main() {
 
     # Helper to run terraform apply with all vars
     tf_apply() {
-        terraform apply -auto-approve \
-            -var="sql_hostname=$SQL_HOST" \
-            -var="database_name=$DB_NAME" \
-            -var="mi_name=$MI_NAME" \
-            -var="mi_object_id=$MI_OBJECT_ID" \
-            -var="azure_tenant_id=$AZURE_TENANT_ID" 2>&1
+        terraform apply -auto-approve "${TF_VARS[@]}" 2>&1
     }
 
     # Test 1: Delete MI role and recover
@@ -417,12 +483,7 @@ main() {
 
     log_info "Destroying MSSQL Resources..."
     cd "$RESOURCES_DIR"
-    if terraform destroy -auto-approve \
-        -var="sql_hostname=$SQL_HOST" \
-        -var="database_name=$DB_NAME" \
-        -var="mi_name=$MI_NAME" \
-        -var="mi_object_id=$MI_OBJECT_ID" \
-        -var="azure_tenant_id=$AZURE_TENANT_ID"; then
+    if terraform destroy -auto-approve "${TF_VARS[@]}"; then
         log_record "MSSQL Resources Destruction" "PASS"
     else
         log_record "MSSQL Resources Destruction" "FAIL"

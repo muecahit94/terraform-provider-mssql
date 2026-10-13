@@ -729,8 +729,26 @@ func (r *SQLLoginResource) Read(ctx context.Context, req resource.ReadRequest, r
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabaseName)
 	data.DefaultLanguage = types.StringValue(login.DefaultLanguageName)
 	data.CheckExpirationEnabled = types.BoolValue(login.CheckExpirationEnabled)
-	data.CheckPolicyEnabled = types.BoolValue(login.CheckPolicyEnabled)
 	data.IsDisabled = types.BoolValue(login.IsDisabled)
+
+	// Azure SQL Database always enforces the password policy but reports CHECK_POLICY as off:
+	// keep the known value, imports read true.
+	azure, err := client.IsAzureSQLDatabase(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read SQL login", err.Error())
+		return
+	}
+	switch {
+	case !azure:
+		data.CheckPolicyEnabled = types.BoolValue(login.CheckPolicyEnabled)
+	case data.CheckPolicyEnabled.IsNull() || data.CheckPolicyEnabled.IsUnknown():
+		data.CheckPolicyEnabled = types.BoolValue(true)
+	}
+
+	// Imports before 1.8.0 stored an empty password; null is what a configuration without a password plans.
+	if !data.Password.IsNull() && !data.Password.IsUnknown() && data.Password.ValueString() == "" {
+		data.Password = types.StringNull()
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -875,6 +893,6 @@ func (r *SQLLoginResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_database"), login.DefaultDatabaseName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_language"), login.DefaultLanguageName)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("check_expiration_enabled"), login.CheckExpirationEnabled)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("check_policy_enabled"), login.CheckPolicyEnabled)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("is_disabled"), login.IsDisabled)...)
+	// Read sets check_policy_enabled; on Azure SQL Database it reports true, the policy is always enforced there.
 }

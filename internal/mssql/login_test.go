@@ -4,8 +4,78 @@
 package mssql
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestCreateLoginStatement(t *testing.T) {
+	base := CreateSQLLoginOptions{Name: "app", Password: "P@ss'w0rd", CheckPolicyEnabled: true}
+
+	got, err := createLoginStatement(base, false)
+	want := "CREATE LOGIN [app] WITH PASSWORD = N'P@ss''w0rd', DEFAULT_DATABASE = [master], CHECK_EXPIRATION = OFF, CHECK_POLICY = ON"
+	if err != nil || got != want {
+		t.Errorf("SQL Server: got %q, %v; want %q", got, err, want)
+	}
+
+	withSID := base
+	withSID.SID = "0x0123456789ABCDEF0123456789ABCDEF"
+	withSID.DefaultLanguage = "Deutsch"
+	got, _ = createLoginStatement(withSID, false)
+	if !strings.Contains(got, ", SID = 0x0123456789ABCDEF0123456789ABCDEF") || !strings.HasSuffix(got, ", DEFAULT_LANGUAGE = [Deutsch]") {
+		t.Errorf("SQL Server with SID and language: %q", got)
+	}
+
+	// Azure SQL Database accepts only PASSWORD and SID.
+	got, err = createLoginStatement(base, true)
+	if err != nil || got != "CREATE LOGIN [app] WITH PASSWORD = N'P@ss''w0rd'" {
+		t.Errorf("Azure: got %q, %v", got, err)
+	}
+	got, err = createLoginStatement(withSID, true)
+	if err == nil {
+		t.Errorf("Azure must reject a default language other than %s, got %q", azureDefaultLanguage, got)
+	}
+
+	azureDefaults := base
+	azureDefaults.DefaultDatabase = "MASTER"
+	azureDefaults.DefaultLanguage = "us_english"
+	if _, err := createLoginStatement(azureDefaults, true); err != nil {
+		t.Errorf("Azure must accept its own defaults: %v", err)
+	}
+
+	// The policy is always enforced on Azure, so CHECK_POLICY = OFF has no effect and is not an error.
+	policyOff := base
+	policyOff.CheckPolicyEnabled = false
+	if got, err := createLoginStatement(policyOff, true); err != nil || strings.Contains(got, "CHECK_POLICY") {
+		t.Errorf("Azure with check_policy_enabled = false: got %q, %v", got, err)
+	}
+}
+
+func TestAzureLoginOptionsError(t *testing.T) {
+	str := func(s string) *string { return &s }
+	yes, no := true, false
+
+	tests := []struct {
+		name            string
+		db, lang        *string
+		expiration      *bool
+		wantErrContains string
+	}{
+		{name: "nothing set"},
+		{name: "defaults", db: str("master"), lang: str("us_english"), expiration: &no},
+		{name: "other database", db: str("app"), wantErrContains: "default_database"},
+		{name: "other language", lang: str("Deutsch"), wantErrContains: "default_language"},
+		{name: "expiration", expiration: &yes, wantErrContains: "check_expiration_enabled"},
+	}
+	for _, tt := range tests {
+		err := azureLoginOptionsError(tt.db, tt.lang, tt.expiration)
+		if tt.wantErrContains == "" && err != nil {
+			t.Errorf("%s: unexpected error %v", tt.name, err)
+		}
+		if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+			t.Errorf("%s: error = %v, want it to mention %q", tt.name, err, tt.wantErrContains)
+		}
+	}
+}
 
 func TestFormatSID(t *testing.T) {
 	tests := []struct {
