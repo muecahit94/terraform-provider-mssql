@@ -8,9 +8,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -52,6 +54,7 @@ type Client struct {
 	port     int
 	config   *Config // Store config for creating database-specific connections
 	pool     *ClientPool
+	servers  map[string]*Config
 
 	engineMu      sync.Mutex
 	engineEdition int // 0 until detected
@@ -150,6 +153,24 @@ func NewMultiServerClient() *Client {
 	return &Client{
 		pool: NewClientPool(),
 	}
+}
+
+// ServerEndpoint returns a normalized endpoint suitable for identifying a server.
+func ServerEndpoint(hostname string, port int) string {
+	if port == 0 {
+		port = 1433
+	}
+	return net.JoinHostPort(strings.ToLower(strings.TrimSuffix(hostname, ".")), strconv.Itoa(port))
+}
+
+// SetServers configures the named server registry for resource connections.
+func (c *Client) SetServers(servers map[string]*Config) {
+	c.servers = servers
+}
+
+// Servers returns the immutable server registry configured for this provider instance.
+func (c *Client) Servers() map[string]*Config {
+	return c.servers
 }
 
 // connectWithSQLAuth establishes a connection using SQL authentication.

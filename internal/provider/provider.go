@@ -6,9 +6,12 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -31,6 +34,64 @@ type MSSQLProviderModel struct {
 	Port      types.Int64     `tfsdk:"port"`
 	SQLAuth   *SQLAuthModel   `tfsdk:"sql_auth"`
 	AzureAuth *AzureAuthModel `tfsdk:"azure_auth"`
+	Servers   types.Map       `tfsdk:"servers"`
+}
+
+type registeredServerModel struct {
+	Hostname types.String `tfsdk:"hostname"`
+	Port     types.Int64  `tfsdk:"port"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+}
+
+func registeredServerConfigs(ctx context.Context, servers types.Map) (map[string]*mssql.Config, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if servers.IsNull() {
+		return nil, diags
+	}
+	if servers.IsUnknown() {
+		diags.AddAttributeError(path.Root("servers"), "Unknown server registry", "The server registry must be known when the provider is configured.")
+		return nil, diags
+	}
+
+	var entries map[string]registeredServerModel
+	diags.Append(servers.ElementsAs(ctx, &entries, false)...)
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	configs := make(map[string]*mssql.Config, len(entries))
+	endpoints := make(map[string]string, len(entries))
+	for key, entry := range entries {
+		if key == "" || entry.Hostname.IsUnknown() || entry.Hostname.IsNull() || entry.Hostname.ValueString() == "" ||
+			entry.Username.IsUnknown() || entry.Username.IsNull() || entry.Username.ValueString() == "" ||
+			entry.Password.IsUnknown() || entry.Password.IsNull() || entry.Password.ValueString() == "" ||
+			entry.Port.IsUnknown() || (!entry.Port.IsNull() && (entry.Port.ValueInt64() < 1 || entry.Port.ValueInt64() > 65535)) {
+			diags.AddAttributeError(path.Root("servers").AtMapKey(key), "Invalid server registry entry",
+				"Each server needs a non-empty key, hostname, username, and password, and a known port between 1 and 65535.")
+			continue
+		}
+		port := 1433
+		if !entry.Port.IsNull() {
+			port = int(entry.Port.ValueInt64())
+		}
+		endpoint := mssql.ServerEndpoint(entry.Hostname.ValueString(), port)
+		if previous, ok := endpoints[endpoint]; ok {
+			diags.AddAttributeError(path.Root("servers").AtMapKey(key), "Duplicate server endpoint",
+				fmt.Sprintf("Server keys %q and %q refer to the same endpoint. Each endpoint must be unique.", previous, key))
+			continue
+		}
+		endpoints[endpoint] = key
+		configs[key] = &mssql.Config{
+			Hostname: entry.Hostname.ValueString(),
+			Port:     port,
+			SQLAuth: &mssql.SQLAuthConfig{
+				Username: entry.Username.ValueString(),
+				Password: entry.Password.ValueString(),
+			},
+		}
+	}
+	return configs, diags
 }
 
 // SQLAuthModel describes SQL authentication configuration.
@@ -73,6 +134,18 @@ func (p *MSSQLProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			"port": schema.Int64Attribute{
 				Description: "TCP port of SQL endpoint. Defaults to 1433. Can also be set using MSSQL_PORT environment variable.",
 				Optional:    true,
+			},
+			"servers": schema.MapNestedAttribute{
+				Description: "Named SQL Server connections for mssql_sql_login resources. Credentials are taken from the current provider configuration.",
+				Optional:    true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"hostname": schema.StringAttribute{Required: true, Description: "SQL Server hostname."},
+						"port":     schema.Int64Attribute{Optional: true, Description: "SQL Server port. Defaults to 1433."},
+						"username": schema.StringAttribute{Required: true, Description: "SQL authentication username."},
+						"password": schema.StringAttribute{Required: true, Sensitive: true, Description: "SQL authentication password."},
+					},
+				},
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -119,6 +192,12 @@ func (p *MSSQLProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	var config MSSQLProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	servers, serverDiags := registeredServerConfigs(ctx, config.Servers)
+	resp.Diagnostics.Append(serverDiags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -170,6 +249,8 @@ func (p *MSSQLProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			"port":     cfg.Port,
 		})
 	}
+
+	client.SetServers(servers)
 
 	// Make the client available during DataSource and Resource type Configure methods.
 	resp.DataSourceData = client

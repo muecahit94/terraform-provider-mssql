@@ -9,6 +9,7 @@ A Terraform provider to manage Microsoft SQL Server and Azure SQL resources.
 - **Azure AD Authentication**: Support for service principals and managed identities
 - **Write-Only Passwords**: `mssql_sql_login` and `mssql_linked_server_login` take ephemeral passwords that reach neither the plan nor the state file
 - **Resilient Design**: Gracefully handles ID changes and manual modifications
+- **Named SQL Server Connections**: Manage SQL logins across nodes using a provider-level `servers` map and resource `server_key`, with credentials supplied by the current provider configuration
 
 ## Requirements
 
@@ -67,6 +68,12 @@ provider "mssql" {
   azure_auth {}
 }
 ```
+
+### Named SQL Server Connections
+
+For multi-node SQL logins, see [named SQL Server connections](docs/index.md#named-sql-server-connections)
+and [migration from resource-level credentials](docs/resources/sql_login.md#multi-host-logins-with-provider-credentials).
+The registry is optional; existing configurations without it retain their authentication behavior.
 
 ### Environment Variables
 
