@@ -27,6 +27,16 @@ resource "mssql_sql_login" "write_only_password" {
   password_wo_version = "1"
 }
 
+# Multi-host login using provider servers map (recommended for rotating credentials)
+resource "mssql_sql_login" "registered_cluster" {
+  for_each = toset(["primary", "secondary"])
+
+  server_key = each.key
+  name       = "replicated_login"
+  password   = "SecretPassword123!"
+  sid        = "0x0123456789ABCDEF0123456789ABCDEF"
+}
+
 # Multi-host login with per-resource server block and identical SID across hosts
 resource "mssql_sql_login" "multi_server" {
   for_each = toset(["sql-node-01.corp", "sql-node-02.corp"])

@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -536,7 +538,7 @@ func TestGetClient(t *testing.T) {
 		r := &SQLLoginResource{
 			client: mssql.NewMultiServerClient(),
 		}
-		client, diags := r.getClient(ctx, nil)
+		client, diags := r.getClient(ctx, SQLLoginResourceModel{})
 		if !diags.HasError() {
 			t.Errorf("expected error when getting client without default or server block, got client %v", client)
 		}
@@ -546,11 +548,123 @@ func TestGetClient(t *testing.T) {
 		r := &SQLLoginResource{
 			client: nil,
 		}
-		client, diags := r.getClient(ctx, nil)
+		client, diags := r.getClient(ctx, SQLLoginResourceModel{})
 		if !diags.HasError() {
 			t.Errorf("expected error when provider is nil, got client %v", client)
 		}
 	})
+}
+
+func TestResolveRegisteredLoginServer(t *testing.T) {
+	client := mssql.NewMultiServerClient()
+	node1 := &mssql.Config{Hostname: "sql1.example", Port: 1433, SQLAuth: &mssql.SQLAuthConfig{Username: "admin", Password: "current"}}
+	node2 := &mssql.Config{Hostname: "sql2.example", Port: 1434, SQLAuth: &mssql.SQLAuthConfig{Username: "admin2", Password: "current2"}}
+	client.SetServers(map[string]*mssql.Config{"node1": node1, "node2": node2})
+	r := &SQLLoginResource{client: client}
+	old := &ServerModel{
+		Hostname: types.StringValue("SQL1.EXAMPLE."),
+		SQLAuth:  &SQLAuthModel{Username: types.StringValue("old"), Password: types.StringValue("stale")},
+	}
+
+	tests := []struct {
+		name      string
+		model     SQLLoginResourceModel
+		want      *mssql.Config
+		wantError bool
+	}{
+		{"legacy state uses current credentials", SQLLoginResourceModel{Server: old}, node1, false},
+		{"key chooses second node", SQLLoginResourceModel{ServerKey: types.StringValue("node2")}, node2, false},
+		{"matching key and legacy state", SQLLoginResourceModel{Server: old, ServerKey: types.StringValue("node1")}, node1, false},
+		{"missing key", SQLLoginResourceModel{ServerKey: types.StringValue("missing")}, nil, true},
+		{"legacy endpoint missing", SQLLoginResourceModel{Server: &ServerModel{Hostname: types.StringValue("other")}}, nil, true},
+		{"key and legacy endpoint disagree", SQLLoginResourceModel{Server: old, ServerKey: types.StringValue("node2")}, nil, true},
+		{"registered endpoint changed", SQLLoginResourceModel{ServerKey: types.StringValue("node1"), ServerEndpoint: types.StringValue("previous:1433")}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, diags := r.resolveServer(tt.model)
+			if diags.HasError() != tt.wantError {
+				t.Fatalf("error = %v, wantError %v", diags.Errors(), tt.wantError)
+			}
+			if !tt.wantError && got != tt.want {
+				t.Fatal("selected wrong server configuration")
+			}
+		})
+	}
+
+	client.SetServers(nil)
+	cfg, diags := r.resolveServer(SQLLoginResourceModel{Server: old})
+	if diags.HasError() || cfg.SQLAuth.Username != "old" || cfg.SQLAuth.Password != "stale" {
+		t.Fatal("legacy configuration must retain resource authentication")
+	}
+
+	client.SetServers(map[string]*mssql.Config{"node1": node1, "duplicate": node1})
+	_, diags = r.resolveServer(SQLLoginResourceModel{Server: old})
+	if !diags.HasError() {
+		t.Fatal("ambiguous migration endpoint must fail")
+	}
+}
+
+func TestLoginTargetMigration(t *testing.T) {
+	client := mssql.NewMultiServerClient()
+	client.SetServers(map[string]*mssql.Config{
+		"node1": {Hostname: "sql1.example", Port: 1433},
+		"node2": {Hostname: "sql2.example", Port: 1433},
+	})
+	r := &SQLLoginResource{client: client}
+	legacy := SQLLoginResourceModel{Server: &ServerModel{Hostname: types.StringValue("sql1.example")}}
+	migrated := SQLLoginResourceModel{ServerKey: types.StringValue("node1")}
+	if r.targetChanged(migrated, legacy) {
+		t.Fatal("migration to the same endpoint must not replace the login")
+	}
+	migrated.ServerKey = types.StringValue("node2")
+	if !r.targetChanged(migrated, legacy) {
+		t.Fatal("moving to a different endpoint must replace the login")
+	}
+	withoutIdentity := SQLLoginResourceModel{}
+	if !r.targetChanged(migrated, withoutIdentity) {
+		t.Fatal("unknown old endpoint must not be silently treated as a match")
+	}
+}
+
+func TestRegisteredServerConfigs(t *testing.T) {
+	ctx := context.Background()
+	objectType := types.ObjectType{AttrTypes: map[string]attr.Type{
+		"hostname": types.StringType, "port": types.Int64Type,
+		"username": types.StringType, "password": types.StringType,
+	}}
+	entry := registeredServerModel{
+		Hostname: types.StringValue("sql.example"), Port: types.Int64Null(),
+		Username: types.StringValue("admin"), Password: types.StringValue("secret"),
+	}
+	makeMap := func(entries map[string]registeredServerModel) types.Map {
+		t.Helper()
+		value, diags := types.MapValueFrom(ctx, objectType, entries)
+		if diags.HasError() {
+			t.Fatalf("building test registry: %v", diags.Errors())
+		}
+		return value
+	}
+
+	configs, diags := registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{"node": entry}))
+	if diags.HasError() || configs["node"].Port != 1433 || configs["node"].SQLAuth.Password != "secret" {
+		t.Fatal("valid registry did not produce the expected server configuration")
+	}
+	emptyConfigs, diags := registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{}))
+	if diags.HasError() || emptyConfigs != nil {
+		t.Fatalf("empty registry must behave as unset (nil), got %v, errors %v", emptyConfigs, diags.Errors())
+	}
+	duplicate := entry
+	duplicate.Hostname = types.StringValue("SQL.EXAMPLE.")
+	_, diags = registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{"first": entry, "second": duplicate}))
+	if !diags.HasError() {
+		t.Fatal("duplicate endpoints must fail")
+	}
+	entry.Password = types.StringUnknown()
+	_, diags = registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{"node": entry}))
+	if !diags.HasError() {
+		t.Fatal("unknown credentials must fail provider configuration")
+	}
 }
 
 func TestValidateLoginPasswordOnCreate(t *testing.T) {
@@ -630,9 +744,176 @@ func TestSQLLoginModifyPlanRequiresPasswordOnCreateAndReplace(t *testing.T) {
 	}
 }
 
+func TestSQLLoginModifyPlanReplacesChangedRegisteredEndpoint(t *testing.T) {
+	ctx := context.Background()
+	client := mssql.NewMultiServerClient()
+	client.SetServers(map[string]*mssql.Config{
+		"node1": {Hostname: "sql1.example", Port: 1433},
+		"node2": {Hostname: "sql2.example", Port: 1433},
+	})
+	r := &SQLLoginResource{client: client}
+	schemaResp := &fwresource.SchemaResponse{}
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	state := loginObject(objType, map[string]interface{}{
+		"id": "300", "name": "app", "sid": "0x01", "server_key": "node1", "server_endpoint": "sql1.example:1433",
+	})
+	plan := loginObject(objType, map[string]interface{}{
+		"id": "300", "name": "app", "sid": "0x01", "server_key": "node2",
+		"server_endpoint": "sql1.example:1433", "password": "P@ssw0rd123!",
+	})
+	req := fwresource.ModifyPlanRequest{
+		State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+		Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+		Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+	}
+	resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+	r.ModifyPlan(ctx, req, resp)
+	if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server_key")) {
+		t.Fatalf("endpoint change must replace via server_key: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+	}
+}
+
+func TestSQLLoginModifyPlanMigratesLegacyServerInPlace(t *testing.T) {
+	ctx := context.Background()
+	client := mssql.NewMultiServerClient()
+	client.SetServers(map[string]*mssql.Config{"node1": {Hostname: "sql1.example", Port: 1433}})
+	r := &SQLLoginResource{client: client}
+	schemaResp := &fwresource.SchemaResponse{}
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	serverType := objType.AttributeTypes["server"].(tftypes.Object)
+	server := map[string]tftypes.Value{}
+	for name, typ := range serverType.AttributeTypes {
+		server[name] = tftypes.NewValue(typ, nil)
+	}
+
+	server["hostname"] = tftypes.NewValue(tftypes.String, "sql1.example")
+	server["port"] = tftypes.NewValue(tftypes.Number, 1433)
+	state := loginObject(objType, map[string]interface{}{
+		"id": "300", "name": "app", "sid": "0x01", "server": server,
+	})
+	plan := loginObject(objType, map[string]interface{}{
+		"id": "300", "name": "app", "sid": "0x01", "server_key": "node1",
+	})
+	req := fwresource.ModifyPlanRequest{
+		State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+		Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+		Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+	}
+	resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+	r.ModifyPlan(ctx, req, resp)
+	if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 0 {
+		t.Fatalf("same-endpoint migration must not replace: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+	}
+}
+
 func TestCreateSQLLoginRejectsEmptyPassword(t *testing.T) {
 	c := &mssql.Client{}
 	if _, err := c.CreateSQLLogin(context.Background(), mssql.CreateSQLLoginOptions{Name: "app"}); err == nil {
 		t.Error("CreateSQLLogin must refuse an empty password before reaching the server")
 	}
+}
+
+func TestSQLLoginModifyPlanLegacyEndpointIsNull(t *testing.T) {
+	ctx := context.Background()
+	r := &SQLLoginResource{client: mssql.NewMultiServerClient()}
+	schemaResp := &fwresource.SchemaResponse{}
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	state := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01"})
+	plan := loginObject(objType, map[string]interface{}{
+		"id": "300", "name": "app", "sid": "0x01", "server_endpoint": tftypes.UnknownValue,
+	})
+	req := fwresource.ModifyPlanRequest{
+		State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+		Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+		Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: state},
+	}
+	resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+	r.ModifyPlan(ctx, req, resp)
+	var endpoint types.String
+	diags := resp.Plan.GetAttribute(ctx, path.Root("server_endpoint"), &endpoint)
+	if resp.Diagnostics.HasError() || diags.HasError() || !endpoint.IsNull() {
+		t.Fatal("legacy login must plan a null endpoint, not a perpetual unknown")
+	}
+}
+
+func TestSQLLoginModifyPlanReplacesOnUnknownTargetOrEditedRegistryEndpoint(t *testing.T) {
+	ctx := context.Background()
+	client := mssql.NewMultiServerClient()
+	client.SetServers(map[string]*mssql.Config{
+		"node1": {Hostname: "sql2.example", Port: 1433},
+	})
+	r := &SQLLoginResource{client: client}
+	schemaResp := &fwresource.SchemaResponse{}
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+
+	t.Run("edited registry endpoint with same key replaces via server_key", func(t *testing.T) {
+		state := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1", "server_endpoint": "sql1.example:1433",
+		})
+		plan := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1",
+			"server_endpoint": "sql1.example:1433", "password": "P@ssw0rd123!",
+		})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		r.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server_key")) {
+			t.Fatalf("endpoint change with same key must replace via server_key: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
+
+	t.Run("unknown server_key on update requires replace", func(t *testing.T) {
+		state := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1", "server_endpoint": "sql2.example:1433",
+		})
+		plan := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": tftypes.UnknownValue, "password": "P@ssw0rd123!",
+		})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		r.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server_key")) {
+			t.Fatalf("unknown server_key update must require replace: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
+
+	t.Run("unknown legacy hostname on update requires replace", func(t *testing.T) {
+		rLegacy := &SQLLoginResource{client: mssql.NewMultiServerClient()}
+		serverType := objType.AttributeTypes["server"].(tftypes.Object)
+		stateServer := map[string]tftypes.Value{}
+		planServer := map[string]tftypes.Value{}
+		for name, typ := range serverType.AttributeTypes {
+			stateServer[name] = tftypes.NewValue(typ, nil)
+			planServer[name] = tftypes.NewValue(typ, nil)
+		}
+		stateServer["hostname"] = tftypes.NewValue(tftypes.String, "sql1.example")
+		stateServer["port"] = tftypes.NewValue(tftypes.Number, 1433)
+		planServer["hostname"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+		planServer["port"] = tftypes.NewValue(tftypes.Number, 1433)
+
+		state := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01", "server": stateServer})
+		plan := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01", "server": planServer, "password": "P@ssw0rd123!"})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		rLegacy.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server")) {
+			t.Fatalf("unknown legacy hostname update must require replace: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
 }

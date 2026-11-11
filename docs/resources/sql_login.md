@@ -94,6 +94,9 @@ resource "mssql_sql_login" "full_example" {
 
 When synchronizing logins with identical SIDs across multiple SQL Server instances (such as AlwaysOn Availability Group replicas or a fleet of database hosts), you can override the target server directly on the resource:
 
+These blocks persist connection credentials in resource state. Refresh uses the saved credentials,
+so external credential rotation can prevent refresh. Prefer the provider registry below for rotating credentials.
+
 ```hcl
 locals {
   servers = {
@@ -120,6 +123,41 @@ resource "mssql_sql_login" "cluster_user" {
 }
 ```
 
+### Multi-Host Logins with Provider Credentials
+
+Configure the provider's `servers` map as described in the [provider documentation](../index.md).
+Use a server key for each login:
+
+```hcl
+variable "node_names" {
+  type = set(string)
+}
+
+resource "mssql_sql_login" "cluster_user" {
+  for_each = var.node_names
+
+  server_key = each.key
+  name       = "app_user"
+  password   = var.login_password
+}
+```
+
+With `server_key`, every read, create, update and delete uses credentials from the configured provider, rather than credentials
+in the login's state. Changing the server key to a different endpoint requires a replacement. The provider
+rejects an endpoint change for an existing key during refresh to avoid operating on the wrong server.
+
+To migrate an existing `server` block, first configure the provider map with a unique matching hostname and
+port for each existing endpoint. Add `server_key` and remove the old block. During the first refresh, the
+provider resolves the saved endpoint using the map, even if saved credentials are stale. Review the plan
+and apply only if the migration is in-place. Back up state first: previous state snapshots may still contain
+the old connection credentials. Resource addresses do not change, so this migration needs no `moved` blocks.
+If a map is configured, an existing `server` block must match a map entry; the provider never falls back to
+saved credentials. Without a map, legacy behavior is unchanged.
+
+Keep the registry and its keys configured while managing or destroying these logins. Removing the registry
+does not automatically restore resource-level authentication. Back up state before migration; older provider
+versions do not understand the new resource attributes.
+
 ### Existing Login Without a Password in the Configuration
 
 The password of a login is not readable, so a login that already exists (imported, or created earlier) does not need
@@ -134,7 +172,9 @@ resource "mssql_sql_login" "existing" {
 ```
 
 A password is only required to **create** a login, which includes replacing it (a change of `name`, `login_name`,
-`sid` or the `server` block); without one the plan fails with *Missing password*. An empty password is always rejected.
+`sid`, the target endpoint in `server`, or `server_key` selecting another endpoint); without one the plan fails
+with *Missing password*. Migrating a `server` block to a key for the same endpoint does not require replacement.
+An empty password is always rejected.
 To start managing the password later, add `password_wo` (and bump `password_wo_version` to rotate it).
 
 ### Azure SQL Database
@@ -158,7 +198,8 @@ value, and an imported login reads `true`. Azure SQL Managed Instance supports a
 - `check_expiration_enabled` - (Optional) Whether password expiration is checked. Defaults to `false`.
 - `check_policy_enabled` - (Optional) Whether password policy is enforced. Defaults to `true`.
 - `is_disabled` - (Optional) Whether the login is disabled. Defaults to `false`.
-- `server` - (Optional) SQL Server instance configuration block. When omitted, the resource uses the default provider-level connection.
+- `server_key` - (Optional) Key in the provider's `servers` map. Changing to a different endpoint forces a new resource.
+- `server` - (Optional) SQL Server instance configuration block. When omitted, the resource uses `server_key` if set, otherwise the default provider connection. With a provider registry, the block must match a registered endpoint and registry credentials take precedence. If both `server` and `server_key` are set, they must identify the same endpoint.
   - `hostname` - (Optional) FQDN or IP address of the target SQL endpoint. Changing this forces a new resource.
   - `host` - (Optional) Alias for `hostname`.
   - `port` - (Optional) TCP port of SQL endpoint. Defaults to `1433`. Changing this forces a new resource.
@@ -175,6 +216,7 @@ value, and an imported login reads `true`. Azure SQL Managed Instance supports a
 
 - `id` - The login principal ID.
 - `sid` - The SID (Security Identifier) of the SQL login in hexadecimal format.
+- `server_endpoint` - Computed normalized endpoint recorded for a registered server to detect accidental changes. Null for legacy connections without a registry.
 
 ## Import
 
@@ -183,3 +225,12 @@ Logins can be imported using the login name:
 ```shell
 terraform import mssql_sql_login.example my_login
 ```
+
+With the provider's server registry, use the server key and login name, and configure the resource with that key:
+
+```shell
+terraform import mssql_sql_login.example node1/my_login
+```
+
+If a default provider connection is also configured, importing a plain login name
+still uses that default connection.
