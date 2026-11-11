@@ -56,7 +56,7 @@ func registeredServerConfigs(ctx context.Context, servers types.Map) (map[string
 
 	var entries map[string]registeredServerModel
 	diags.Append(servers.ElementsAs(ctx, &entries, false)...)
-	if diags.HasError() {
+	if diags.HasError() || len(entries) == 0 {
 		return nil, diags
 	}
 
@@ -136,7 +136,7 @@ func (p *MSSQLProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 				Optional:    true,
 			},
 			"servers": schema.MapNestedAttribute{
-				Description: "Named SQL Server connections for mssql_sql_login resources. Credentials are taken from the current provider configuration.",
+				Description: "Named SQL Server connections for mssql_sql_login resources and data sources. Credentials are taken from the current provider configuration.",
 				Optional:    true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{

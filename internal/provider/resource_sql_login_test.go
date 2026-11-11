@@ -650,6 +650,10 @@ func TestRegisteredServerConfigs(t *testing.T) {
 	if diags.HasError() || configs["node"].Port != 1433 || configs["node"].SQLAuth.Password != "secret" {
 		t.Fatal("valid registry did not produce the expected server configuration")
 	}
+	emptyConfigs, diags := registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{}))
+	if diags.HasError() || emptyConfigs != nil {
+		t.Fatalf("empty registry must behave as unset (nil), got %v, errors %v", emptyConfigs, diags.Errors())
+	}
 	duplicate := entry
 	duplicate.Hostname = types.StringValue("SQL.EXAMPLE.")
 	_, diags = registeredServerConfigs(ctx, makeMap(map[string]registeredServerModel{"first": entry, "second": duplicate}))
@@ -833,4 +837,83 @@ func TestSQLLoginModifyPlanLegacyEndpointIsNull(t *testing.T) {
 	if resp.Diagnostics.HasError() || diags.HasError() || !endpoint.IsNull() {
 		t.Fatal("legacy login must plan a null endpoint, not a perpetual unknown")
 	}
+}
+
+func TestSQLLoginModifyPlanReplacesOnUnknownTargetOrEditedRegistryEndpoint(t *testing.T) {
+	ctx := context.Background()
+	client := mssql.NewMultiServerClient()
+	client.SetServers(map[string]*mssql.Config{
+		"node1": {Hostname: "sql2.example", Port: 1433},
+	})
+	r := &SQLLoginResource{client: client}
+	schemaResp := &fwresource.SchemaResponse{}
+	r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+
+	t.Run("edited registry endpoint with same key replaces via server_key", func(t *testing.T) {
+		state := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1", "server_endpoint": "sql1.example:1433",
+		})
+		plan := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1",
+			"server_endpoint": "sql1.example:1433", "password": "P@ssw0rd123!",
+		})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		r.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server_key")) {
+			t.Fatalf("endpoint change with same key must replace via server_key: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
+
+	t.Run("unknown server_key on update requires replace", func(t *testing.T) {
+		state := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": "node1", "server_endpoint": "sql2.example:1433",
+		})
+		plan := loginObject(objType, map[string]interface{}{
+			"id": "300", "name": "app", "sid": "0x01", "server_key": tftypes.UnknownValue, "password": "P@ssw0rd123!",
+		})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		r.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server_key")) {
+			t.Fatalf("unknown server_key update must require replace: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
+
+	t.Run("unknown legacy hostname on update requires replace", func(t *testing.T) {
+		rLegacy := &SQLLoginResource{client: mssql.NewMultiServerClient()}
+		serverType := objType.AttributeTypes["server"].(tftypes.Object)
+		stateServer := map[string]tftypes.Value{}
+		planServer := map[string]tftypes.Value{}
+		for name, typ := range serverType.AttributeTypes {
+			stateServer[name] = tftypes.NewValue(typ, nil)
+			planServer[name] = tftypes.NewValue(typ, nil)
+		}
+		stateServer["hostname"] = tftypes.NewValue(tftypes.String, "sql1.example")
+		stateServer["port"] = tftypes.NewValue(tftypes.Number, 1433)
+		planServer["hostname"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+		planServer["port"] = tftypes.NewValue(tftypes.Number, 1433)
+
+		state := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01", "server": stateServer})
+		plan := loginObject(objType, map[string]interface{}{"id": "300", "name": "app", "sid": "0x01", "server": planServer, "password": "P@ssw0rd123!"})
+		req := fwresource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: schemaResp.Schema, Raw: state},
+			Plan:   tfsdk.Plan{Schema: schemaResp.Schema, Raw: plan},
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: plan},
+		}
+		resp := &fwresource.ModifyPlanResponse{Plan: req.Plan}
+		rLegacy.ModifyPlan(ctx, req, resp)
+		if resp.Diagnostics.HasError() || len(resp.RequiresReplace) != 1 || !resp.RequiresReplace[0].Equal(path.Root("server")) {
+			t.Fatalf("unknown legacy hostname update must require replace: diagnostics %v, paths %v", resp.Diagnostics.Errors(), resp.RequiresReplace)
+		}
+	})
 }

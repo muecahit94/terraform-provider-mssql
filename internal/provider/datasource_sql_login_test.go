@@ -34,7 +34,7 @@ func TestSQLLoginDataSourceGetClient(t *testing.T) {
 		d := &SQLLoginDataSource{
 			client: mssql.NewMultiServerClient(),
 		}
-		client, diags := d.getClient(ctx, nil)
+		client, diags := d.getClient(ctx, SQLLoginDataSourceModel{})
 		if !diags.HasError() {
 			t.Errorf("expected error when getting client without default or server block, got client %v", client)
 		}
@@ -44,9 +44,38 @@ func TestSQLLoginDataSourceGetClient(t *testing.T) {
 		d := &SQLLoginDataSource{
 			client: nil,
 		}
-		client, diags := d.getClient(ctx, nil)
+		client, diags := d.getClient(ctx, SQLLoginDataSourceModel{})
 		if !diags.HasError() {
 			t.Errorf("expected error when provider is nil, got client %v", client)
+		}
+	})
+
+	t.Run("registered servers map resolves key and legacy block", func(t *testing.T) {
+		client := mssql.NewMultiServerClient()
+		node1 := &mssql.Config{Hostname: "sql1.example", Port: 1433, SQLAuth: &mssql.SQLAuthConfig{Username: "admin", Password: "current"}}
+		node2 := &mssql.Config{Hostname: "sql2.example", Port: 1434, SQLAuth: &mssql.SQLAuthConfig{Username: "admin2", Password: "current2"}}
+		client.SetServers(map[string]*mssql.Config{"node1": node1, "node2": node2})
+		d := &SQLLoginDataSource{client: client}
+		legacy := &ServerModel{
+			Hostname: types.StringValue("SQL1.EXAMPLE."),
+			SQLAuth:  &SQLAuthModel{Username: types.StringValue("old"), Password: types.StringValue("stale")},
+		}
+
+		got, diags := d.resolveServer(SQLLoginDataSourceModel{ServerKey: types.StringValue("node2")})
+		if diags.HasError() || got != node2 {
+			t.Fatalf("expected node2, got %v, errors %v", got, diags.Errors())
+		}
+
+		got, diags = d.resolveServer(SQLLoginDataSourceModel{Server: legacy})
+		if diags.HasError() || got != node1 {
+			t.Fatalf("expected legacy block to resolve node1 from registry, got %v, errors %v", got, diags.Errors())
+		}
+
+		if _, diags := d.resolveServer(SQLLoginDataSourceModel{ServerKey: types.StringValue("missing")}); !diags.HasError() {
+			t.Error("missing server key must fail")
+		}
+		if _, diags := d.resolveServer(SQLLoginDataSourceModel{Server: legacy, ServerKey: types.StringValue("node2")}); !diags.HasError() {
+			t.Error("mismatched server_key and server block must fail")
 		}
 	})
 }

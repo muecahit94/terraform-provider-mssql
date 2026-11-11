@@ -133,10 +133,10 @@ provider is configured. Port defaults to `1433` and must be between `1` and
 `65535`. Endpoints must be unique; matching ignores hostname case and a trailing
 dot, but does not resolve DNS aliases.
 
-The registry supports SQL authentication for `mssql_sql_login` only. Other
-resources and data sources still need a default provider connection or a
-separately configured provider alias. A registry can coexist with a default
-connection; it does not select a default server automatically.
+The registry supports SQL authentication for `mssql_sql_login` resources and data
+sources only. Other resources and data sources still need a default provider
+connection or a separately configured provider alias. A registry can coexist with
+a default connection; it does not select a default server automatically.
 
 Credentials come from the current provider configuration for each connection,
 not the login's resource state. The map is not a background secret refresh:
@@ -156,7 +156,7 @@ before switching existing resources.
 
 - `hostname` (String) SQL Server hostname. Can be set via `MSSQL_HOSTNAME` environment variable.
 - `port` (Number) SQL Server port. Defaults to `1433`. Can be set via `MSSQL_PORT` environment variable.
-- `servers` (Map of Object) Named SQL Server connections for `mssql_sql_login`. Each object requires `hostname`, `username`, and sensitive `password`; `port` is optional and defaults to `1433`.
+- `servers` (Map of Object) Named SQL Server connections for `mssql_sql_login` resources and data sources. Each object requires `hostname`, `username`, and sensitive `password`; `port` is optional and defaults to `1433`.
 
 ### Blocks
 

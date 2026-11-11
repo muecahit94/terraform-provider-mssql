@@ -36,6 +36,7 @@ type SQLLoginDataSourceModel struct {
 	CheckExpirationEnabled types.Bool   `tfsdk:"check_expiration_enabled"`
 	CheckPolicyEnabled     types.Bool   `tfsdk:"check_policy_enabled"`
 	IsDisabled             types.Bool   `tfsdk:"is_disabled"`
+	ServerKey              types.String `tfsdk:"server_key"`
 	Server                 *ServerModel `tfsdk:"server"`
 }
 
@@ -56,10 +57,14 @@ func (d *SQLLoginDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 			"check_expiration_enabled": schema.BoolAttribute{Computed: true},
 			"check_policy_enabled":     schema.BoolAttribute{Computed: true},
 			"is_disabled":              schema.BoolAttribute{Computed: true},
+			"server_key": schema.StringAttribute{
+				Description: "Key of a server in the provider's servers map.",
+				Optional:    true,
+			},
 		},
 		Blocks: map[string]schema.Block{
 			"server": schema.SingleNestedBlock{
-				Description: "SQL Server instance configuration. If omitted, the default provider connection settings are used.",
+				Description: "SQL Server instance configuration. If omitted, server_key or the default provider connection is used.",
 				Attributes: map[string]schema.Attribute{
 					"hostname": schema.StringAttribute{
 						Description: "FQDN or IP address of the SQL endpoint.",
@@ -139,44 +144,12 @@ func (d *SQLLoginDataSource) Configure(ctx context.Context, req datasource.Confi
 	d.client = client
 }
 
-func (d *SQLLoginDataSource) getClient(ctx context.Context, server *ServerModel) (*mssql.Client, diag.Diagnostics) {
-	var diags diag.Diagnostics
+func (d *SQLLoginDataSource) resolveServer(data SQLLoginDataSourceModel) (*mssql.Config, diag.Diagnostics) {
+	return resolveServerConfig(d.client, data.ServerKey, types.StringNull(), data.Server)
+}
 
-	if server != nil && (!server.Hostname.IsNull() || !server.Host.IsNull()) {
-		cfg, sDiags := serverToConfig(server)
-		diags.Append(sDiags...)
-		if diags.HasError() {
-			return nil, diags
-		}
-
-		if d.client == nil {
-			diags.AddError(
-				"MSSQL Provider Not Configured",
-				"The MSSQL provider has not been initialized.",
-			)
-			return nil, diags
-		}
-
-		client, err := d.client.GetClientForServer(ctx, cfg)
-		if err != nil {
-			diags.AddError(
-				"Failed to Connect to SQL Server",
-				fmt.Sprintf("Failed to establish connection to server %s:%d: %s", cfg.Hostname, cfg.Port, err.Error()),
-			)
-			return nil, diags
-		}
-		return client, diags
-	}
-
-	if d.client == nil || d.client.DB() == nil {
-		diags.AddError(
-			"Default MSSQL Connection Not Configured",
-			"No connection configuration was found. You must either configure connection settings in the provider block (hostname, auth) or provide a 'server' block on the data source.",
-		)
-		return nil, diags
-	}
-
-	return d.client, diags
+func (d *SQLLoginDataSource) getClient(ctx context.Context, data SQLLoginDataSourceModel) (*mssql.Client, diag.Diagnostics) {
+	return getLoginClient(ctx, d.client, data.ServerKey, types.StringNull(), data.Server, "data source")
 }
 
 func validateDataSourceLoginName(data SQLLoginDataSourceModel) (string, diag.Diagnostics) {
@@ -219,6 +192,11 @@ func (d *SQLLoginDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
+	if !data.ServerKey.IsNull() && !data.ServerKey.IsUnknown() && data.ServerKey.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("server_key"), "Empty server key", "The server key must not be empty.")
+		return
+	}
+
 	if data.Server != nil {
 		resp.Diagnostics.Append(validateServerConfig(data.Server)...)
 		if resp.Diagnostics.HasError() {
@@ -226,7 +204,7 @@ func (d *SQLLoginDataSource) Read(ctx context.Context, req datasource.ReadReques
 		}
 	}
 
-	client, clientDiags := d.getClient(ctx, data.Server)
+	client, clientDiags := d.getClient(ctx, data)
 	resp.Diagnostics.Append(clientDiags...)
 	if resp.Diagnostics.HasError() {
 		return

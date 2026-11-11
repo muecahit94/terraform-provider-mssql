@@ -23,6 +23,23 @@ output "is_disabled" {
 }
 ```
 
+### With Provider Registry (`server_key`)
+
+Configure the provider's `servers` map as described in the [provider documentation](../index.md#named-sql-server-connections) and select a node with `server_key`:
+
+```hcl
+variable "node_names" {
+  type = set(string)
+}
+
+data "mssql_sql_login" "cluster_users" {
+  for_each = var.node_names
+
+  server_key = each.key
+  name       = "app_user"
+}
+```
+
 ### With Server Override and login_name Alias
 
 ```hcl
@@ -74,7 +91,8 @@ data "mssql_sql_login" "cluster_users" {
 
 - `name` - (Optional) The name of the login. Exactly one of `name` or `login_name` must be set.
 - `login_name` - (Optional) Alias for `name`. The name of the login. Exactly one of `name` or `login_name` must be set.
-- `server` - (Optional) SQL Server instance configuration block. When omitted, the data source uses the default provider-level connection.
+- `server_key` - (Optional) Key in the provider's `servers` map.
+- `server` - (Optional) SQL Server instance configuration block. When omitted, the data source uses `server_key` if set, otherwise the default provider-level connection. With a provider registry, the block must match a registered endpoint and registry credentials take precedence. If both `server` and `server_key` are set, they must identify the same endpoint.
   - `hostname` - (Optional) FQDN or IP address of the target SQL endpoint.
   - `host` - (Optional) Alias for `hostname`.
   - `port` - (Optional) TCP port of SQL endpoint. Defaults to `1433`.

@@ -98,8 +98,9 @@ func legacyServerChanged(plan, state SQLLoginResourceModel) bool {
 	if stateServer == nil {
 		stateServer = &ServerModel{}
 	}
-	return changedKnown(planServer.Hostname, stateServer.Hostname) || changedKnown(planServer.Host, stateServer.Host) ||
-		(!planServer.Port.IsNull() && !stateServer.Port.IsNull() && changedKnown(planServer.Port, stateServer.Port))
+	return !planServer.Hostname.Equal(stateServer.Hostname) || !planServer.Host.Equal(stateServer.Host) ||
+		(!planServer.Port.IsNull() && !stateServer.Port.IsNull() && !planServer.Port.Equal(stateServer.Port)) ||
+		(stateServer.Port.IsNull() && !planServer.Port.IsNull() && (planServer.Port.IsUnknown() || planServer.Port.ValueInt64() != 1433))
 }
 
 func loginEndpoint(server *ServerModel) string {
@@ -118,7 +119,7 @@ func loginEndpoint(server *ServerModel) string {
 
 func (r *SQLLoginResource) targetChanged(plan, state SQLLoginResourceModel) bool {
 	if plan.ServerKey.IsUnknown() {
-		return false
+		return true
 	}
 	if !plan.ServerKey.IsNull() && plan.ServerKey.ValueString() != "" && r.client != nil {
 		if cfg, ok := r.client.Servers()[plan.ServerKey.ValueString()]; ok {
@@ -152,7 +153,7 @@ func (r *SQLLoginResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if plan.ServerKey.IsNull() && (r.client == nil || r.client.Servers() == nil || plan.Server == nil) {
+	if plan.ServerKey.IsNull() && (r.client == nil || len(r.client.Servers()) == 0 || plan.Server == nil) {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("server_endpoint"), types.StringNull())...)
 	}
 	if r.client != nil && !plan.ServerKey.IsNull() && !plan.ServerKey.IsUnknown() && plan.ServerKey.ValueString() != "" {
@@ -177,7 +178,7 @@ func (r *SQLLoginResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		}
 		targetChanged := r.targetChanged(plan, state)
 		if targetChanged {
-			if !plan.ServerKey.Equal(state.ServerKey) {
+			if !plan.ServerKey.Equal(state.ServerKey) || (!plan.ServerKey.IsNull() && plan.ServerKey.ValueString() != "") {
 				resp.RequiresReplace = append(resp.RequiresReplace, path.Root("server_key"))
 			} else {
 				resp.RequiresReplace = append(resp.RequiresReplace, path.Root("server"))
@@ -381,20 +382,21 @@ func serverToConfig(server *ServerModel) (*mssql.Config, diag.Diagnostics) {
 	return cfg, diags
 }
 
-// resolveServer chooses credentials without contacting the server.
-func (r *SQLLoginResource) resolveServer(data SQLLoginResourceModel) (*mssql.Config, diag.Diagnostics) {
+// resolveServerConfig chooses credentials from the provider's server registry or a legacy server
+// override block, returning nil when the default provider connection should be used.
+func resolveServerConfig(root *mssql.Client, serverKey, serverEndpoint types.String, server *ServerModel) (*mssql.Config, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	if r.client == nil {
+	if root == nil {
 		diags.AddError("MSSQL Provider Not Configured", "The MSSQL provider has not been initialized.")
 		return nil, diags
 	}
-	if data.ServerKey.IsUnknown() {
+	if serverKey.IsUnknown() {
 		diags.AddError("Unknown server identity", "The server key must be known before connecting.")
 		return nil, diags
 	}
-	servers := r.client.Servers()
-	key := data.ServerKey.ValueString()
+	servers := root.Servers()
+	key := serverKey.ValueString()
 	var cfg *mssql.Config
 	if key != "" {
 		var ok bool
@@ -403,8 +405,8 @@ func (r *SQLLoginResource) resolveServer(data SQLLoginResourceModel) (*mssql.Con
 			diags.AddError("Server key not found", fmt.Sprintf("Server key %q is not configured in the provider's servers map.", key))
 			return nil, diags
 		}
-	} else if data.Server != nil && servers != nil {
-		endpoint := loginEndpoint(data.Server)
+	} else if server != nil && len(servers) > 0 {
+		endpoint := loginEndpoint(server)
 		for _, candidate := range servers {
 			if endpoint != "" && endpoint == mssql.ServerEndpoint(candidate.Hostname, candidate.Port) {
 				if cfg != nil {
@@ -418,30 +420,30 @@ func (r *SQLLoginResource) resolveServer(data SQLLoginResourceModel) (*mssql.Con
 			diags.AddError("Server endpoint not found", "The saved server endpoint does not match the provider's servers map.")
 			return nil, diags
 		}
-	} else if data.Server != nil {
-		return serverToConfig(data.Server)
+	} else if server != nil {
+		return serverToConfig(server)
 	} else {
 		return nil, diags
 	}
 
 	endpoint := mssql.ServerEndpoint(cfg.Hostname, cfg.Port)
-	if saved := data.ServerEndpoint.ValueString(); saved != "" && saved != endpoint {
+	if saved := serverEndpoint.ValueString(); saved != "" && saved != endpoint {
 		diags.AddError("Server endpoint changed", "The registered server endpoint differs from the endpoint saved for this login. Restore the original endpoint before planning a migration.")
 	}
-	if saved := loginEndpoint(data.Server); saved != "" && saved != endpoint {
-		diags.AddError("Server endpoint mismatch", "The server key and the resource's saved server block refer to different endpoints.")
+	if saved := loginEndpoint(server); saved != "" && saved != endpoint {
+		diags.AddError("Server endpoint mismatch", "The server key and the saved server block refer to different endpoints.")
 	}
 	return cfg, diags
 }
 
-// getClient returns the resource-specific client or the provider's default client.
-func (r *SQLLoginResource) getClient(ctx context.Context, data SQLLoginResourceModel) (*mssql.Client, diag.Diagnostics) {
-	cfg, diags := r.resolveServer(data)
+// getLoginClient returns the pooled client for a target server or the provider's default client.
+func getLoginClient(ctx context.Context, root *mssql.Client, serverKey, serverEndpoint types.String, server *ServerModel, targetKind string) (*mssql.Client, diag.Diagnostics) {
+	cfg, diags := resolveServerConfig(root, serverKey, serverEndpoint, server)
 	if diags.HasError() {
 		return nil, diags
 	}
 	if cfg != nil {
-		client, err := r.client.GetClientForServer(ctx, cfg)
+		client, err := root.GetClientForServer(ctx, cfg)
 		if err != nil {
 			diags.AddError(
 				"Failed to Connect to SQL Server",
@@ -453,19 +455,29 @@ func (r *SQLLoginResource) getClient(ctx context.Context, data SQLLoginResourceM
 	}
 
 	// Fall back to provider default client
-	if r.client == nil || r.client.DB() == nil {
+	if root == nil || root.DB() == nil {
 		diags.AddError(
 			"Default MSSQL Connection Not Configured",
-			"No connection configuration was found. You must either configure connection settings in the provider block (hostname, auth) or provide a 'server' block on the resource.",
+			fmt.Sprintf("No connection configuration was found. You must either configure connection settings in the provider block (hostname, auth), set 'server_key', or provide a 'server' block on the %s.", targetKind),
 		)
 		return nil, diags
 	}
 
-	return r.client, diags
+	return root, diags
+}
+
+// resolveServer chooses credentials without contacting the server.
+func (r *SQLLoginResource) resolveServer(data SQLLoginResourceModel) (*mssql.Config, diag.Diagnostics) {
+	return resolveServerConfig(r.client, data.ServerKey, data.ServerEndpoint, data.Server)
+}
+
+// getClient returns the resource-specific client or the provider's default client.
+func (r *SQLLoginResource) getClient(ctx context.Context, data SQLLoginResourceModel) (*mssql.Client, diag.Diagnostics) {
+	return getLoginClient(ctx, r.client, data.ServerKey, data.ServerEndpoint, data.Server, "resource")
 }
 
 func (r *SQLLoginResource) setServerEndpoint(data *SQLLoginResourceModel, client *mssql.Client) {
-	if r.client.Servers() != nil && (data.Server != nil || data.ServerKey.ValueString() != "") {
+	if len(r.client.Servers()) > 0 && (data.Server != nil || data.ServerKey.ValueString() != "") {
 		data.ServerEndpoint = types.StringValue(mssql.ServerEndpoint(client.Hostname(), client.Port()))
 	} else {
 		data.ServerEndpoint = types.StringNull()
@@ -997,7 +1009,7 @@ func (r *SQLLoginResource) Delete(ctx context.Context, req resource.DeleteReques
 func (r *SQLLoginResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	data := SQLLoginResourceModel{}
 	loginName := req.ID
-	if r.client != nil && r.client.Servers() != nil && (strings.Contains(req.ID, "/") || r.client.DB() == nil) {
+	if r.client != nil && len(r.client.Servers()) > 0 && (strings.Contains(req.ID, "/") || r.client.DB() == nil) {
 		key, name, ok := strings.Cut(req.ID, "/")
 		if !ok || key == "" || name == "" {
 			resp.Diagnostics.AddError("Invalid import ID", "Use server_key/login_name to import a login with a server registry.")
