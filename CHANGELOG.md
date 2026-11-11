@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.8.2...v1.8.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* Implement named SQL Server connections for mssql_sql_login ([#53](https://github.com/muecahit94/terraform-provider-mssql/issues/53)) ([e500e81](https://github.com/muecahit94/terraform-provider-mssql/commit/e500e8144ec3e1e8146c40724ec949435af7062b))
+
 ## [1.8.2](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.8.1...v1.8.2) (2026-10-13)
 
 
