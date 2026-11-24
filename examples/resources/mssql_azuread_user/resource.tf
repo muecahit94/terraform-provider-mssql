@@ -16,3 +16,12 @@ resource "mssql_azuread_user" "managed_identity" {
   object_id     = "00000000-0000-0000-0000-000000000000"
   roles         = ["db_datareader", "db_datawriter"]
 }
+
+# Entra ID group: every member can sign in (object_id and type = "X" required)
+resource "mssql_azuread_user" "group" {
+  name          = "GRP_APPLICATIONS"
+  database_name = mssql_database.example.name
+  object_id     = "00000000-0000-0000-0000-000000000000"
+  type          = "X"
+  roles         = ["db_datareader", "db_datawriter"]
+}

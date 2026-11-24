@@ -24,6 +24,7 @@ import (
 var _ resource.Resource = &AzureADUserResource{}
 var _ resource.ResourceWithImportState = &AzureADUserResource{}
 var _ resource.ResourceWithMoveState = &AzureADUserResource{}
+var _ resource.ResourceWithValidateConfig = &AzureADUserResource{}
 
 func NewAzureADUserResource() resource.Resource {
 	return &AzureADUserResource{}
@@ -40,6 +41,7 @@ type AzureADUserResourceModel struct {
 	ObjectID      types.String `tfsdk:"object_id"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
 	Roles         types.Set    `tfsdk:"roles"`
+	Type          types.String `tfsdk:"type"`
 }
 
 func (r *AzureADUserResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -89,7 +91,40 @@ func (r *AzureADUserResource) Schema(ctx context.Context, req resource.SchemaReq
 				Computed:    true,
 				ElementType: types.StringType,
 			},
+			"type": schema.StringAttribute{
+				Description: "The Entra ID principal type: `E` for a user, a service principal or a managed identity, `X` for a group. " +
+					"Only used with `object_id`, where it defaults to `E`; without `object_id` the server resolves the principal. " +
+					"Read from the database (`sys.database_principals.type`).",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIfConfigured(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
+	}
+}
+
+// ValidateConfig rejects a type that CREATE USER would refuse, or that would be ignored without an object ID.
+func (r *AzureADUserResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data AzureADUserResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() || data.Type.IsNull() || data.Type.IsUnknown() {
+		return
+	}
+
+	principalType := data.Type.ValueString()
+	if principalType != mssql.AzureADUserType && principalType != mssql.AzureADGroupType {
+		resp.Diagnostics.AddAttributeError(path.Root("type"), "Invalid Azure AD principal type",
+			fmt.Sprintf("%q is not supported: use %q for a user, a service principal or a managed identity, %q for a group.",
+				principalType, mssql.AzureADUserType, mssql.AzureADGroupType))
+		return
+	}
+
+	if data.ObjectID.IsNull() || (!data.ObjectID.IsUnknown() && data.ObjectID.ValueString() == "") {
+		resp.Diagnostics.AddAttributeError(path.Root("type"), "Azure AD principal type requires object_id",
+			"type is only used when the user is created by object_id (WITH SID); without object_id the server resolves the principal type.")
 	}
 }
 
@@ -114,16 +149,18 @@ func (r *AzureADUserResource) Create(ctx context.Context, req resource.CreateReq
 
 	objectID := data.ObjectID.ValueString()
 
-	_, err := r.client.CreateAzureADUser(ctx, mssql.CreateAzureADUserOptions{
+	user, err := r.client.CreateAzureADUser(ctx, mssql.CreateAzureADUserOptions{
 		DatabaseName:  data.DatabaseName.ValueString(),
 		UserName:      data.Name.ValueString(),
 		ObjectID:      objectID,
 		DefaultSchema: data.DefaultSchema.ValueString(),
+		Type:          data.Type.ValueString(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create Azure AD user", err.Error())
 		return
 	}
+	data.Type = principalTypeValue(user)
 
 	// Assign roles if specified
 	var roles []string
@@ -178,6 +215,7 @@ func (r *AzureADUserResource) Read(ctx context.Context, req resource.ReadRequest
 	// Update ID with proper URL format
 	data.ID = types.StringValue(fmt.Sprintf("sqlserver://%s:%d/%s/%s", r.client.Hostname(), r.client.Port(), data.DatabaseName.ValueString(), data.Name.ValueString()))
 	data.DefaultSchema = types.StringValue(user.DefaultSchemaName)
+	data.Type = principalTypeValue(user)
 
 	// Read user's roles
 	roles, err := r.client.GetUserRoles(ctx, data.DatabaseName.ValueString(), data.Name.ValueString())
@@ -484,10 +522,19 @@ func (r *AzureADUserResource) MoveState(ctx context.Context) []resource.StateMov
 					ObjectID:      objectIDValue,
 					DefaultSchema: types.StringPointerValue(defaultSchema),
 					Roles:         rolesSet,
+					Type:          types.StringNull(),
 				}
 
 				resp.Diagnostics.Append(resp.TargetState.Set(ctx, targetStateData)...)
 			},
 		},
 	}
+}
+
+// principalTypeValue returns the Entra ID principal type of a user read from the database, or null when unknown.
+func principalTypeValue(user *mssql.User) types.String {
+	if user == nil || user.Type == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(user.Type)
 }
