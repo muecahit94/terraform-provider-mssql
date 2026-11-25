@@ -55,7 +55,7 @@ type User struct {
 	Name              string
 	DatabaseID        int
 	DefaultSchemaName string
-	Type              string // S = SQL user, U = Windows user, E = External user (Azure AD)
+	Type              string // S = SQL user, U = Windows user, G = Windows group, E = Entra ID user, X = Entra ID group
 	LoginName         string
 	// AuthenticationType is INSTANCE (a login), WINDOWS, NONE (created WITHOUT LOGIN) or EXTERNAL.
 	AuthenticationType string
@@ -270,12 +270,49 @@ func (c *Client) DropUser(ctx context.Context, databaseName, userName string) er
 	return nil
 }
 
+// Entra ID principal types of CREATE USER ... WITH SID: E for a user, a service principal or a managed identity,
+// X for a group. A group created with TYPE = E is not matched when its members sign in.
+const (
+	AzureADUserType  = "E"
+	AzureADGroupType = "X"
+)
+
 // CreateAzureADUserOptions contains options for creating an Azure AD user.
 type CreateAzureADUserOptions struct {
 	DatabaseName  string
 	UserName      string
 	ObjectID      string
 	DefaultSchema string
+	// Type is the Entra ID principal type of a user created by object ID: AzureADUserType (default) or
+	// AzureADGroupType. It is ignored without ObjectID, where the server resolves the principal itself.
+	Type string
+}
+
+// azureADUserStatement builds the CREATE USER statement of an Entra ID principal. With an object ID the user is
+// created WITH SID and TYPE, so the server does not need to look the principal up in Microsoft Graph; without
+// one it is created FROM EXTERNAL PROVIDER.
+func azureADUserStatement(userName, objectID, principalType, defaultSchema string) (string, error) {
+	if objectID == "" {
+		return fmt.Sprintf("CREATE USER %s FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = %s",
+			quoteName(userName), quoteName(defaultSchema)), nil
+	}
+
+	if principalType == "" {
+		principalType = AzureADUserType
+	}
+	if principalType != AzureADUserType && principalType != AzureADGroupType {
+		return "", fmt.Errorf("invalid Azure AD principal type %q: expected %q (user) or %q (group)",
+			principalType, AzureADUserType, AzureADGroupType)
+	}
+
+	// Convert the Azure AD Object ID (GUID) to the binary SID format
+	sid, err := guidToSID(objectID)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert object ID to SID: %w", err)
+	}
+
+	return fmt.Sprintf("CREATE USER %s WITH SID = %s, TYPE = %s, DEFAULT_SCHEMA = %s",
+		quoteName(userName), sid, principalType, quoteName(defaultSchema)), nil
 }
 
 // CreateAzureADUser creates a new Azure AD user.
@@ -293,28 +330,9 @@ func (c *Client) CreateAzureADUser(ctx context.Context, opts CreateAzureADUserOp
 		defaultSchema = "dbo"
 	}
 
-	var query string
-	if opts.ObjectID != "" {
-		// For managed identities: use SID-based creation
-		// Convert Azure AD Object ID (GUID) to binary SID format
-		sid, err := guidToSID(opts.ObjectID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert object ID to SID: %w", err)
-		}
-
-		query = fmt.Sprintf(
-			"CREATE USER %s WITH SID = %s, TYPE = E, DEFAULT_SCHEMA = %s",
-			quoteName(opts.UserName),
-			sid,
-			quoteName(defaultSchema),
-		)
-	} else {
-		// For email-based users: use FROM EXTERNAL PROVIDER
-		query = fmt.Sprintf(
-			"CREATE USER %s FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = %s",
-			quoteName(opts.UserName),
-			quoteName(defaultSchema),
-		)
+	query, err := azureADUserStatement(opts.UserName, opts.ObjectID, opts.Type, defaultSchema)
+	if err != nil {
+		return nil, err
 	}
 
 	_, err = db.ExecContext(ctx, query)

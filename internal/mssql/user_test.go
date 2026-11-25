@@ -55,3 +55,45 @@ func TestAlterUserLoginStatement(t *testing.T) {
 		}
 	}
 }
+
+func TestAzureADUserStatement(t *testing.T) {
+	const objectID = "cbb9c7db-2777-47b7-8954-0269ae3dc553"
+	const sid = "0xDBC7B9CB7727B74789540269AE3DC553"
+	tests := []struct {
+		name, user, objectID, principalType, want string
+	}{
+		{"object ID defaults to a user", "app-identity", objectID, "",
+			"CREATE USER [app-identity] WITH SID = " + sid + ", TYPE = E, DEFAULT_SCHEMA = [dbo]"},
+		{"object ID of a user", "app-identity", objectID, AzureADUserType,
+			"CREATE USER [app-identity] WITH SID = " + sid + ", TYPE = E, DEFAULT_SCHEMA = [dbo]"},
+		{"object ID of a group", "GRP_APPLICATIONS", objectID, AzureADGroupType,
+			"CREATE USER [GRP_APPLICATIONS] WITH SID = " + sid + ", TYPE = X, DEFAULT_SCHEMA = [dbo]"},
+		{"no object ID ignores the type", "alice@contoso.com", "", AzureADGroupType,
+			"CREATE USER [alice@contoso.com] FROM EXTERNAL PROVIDER WITH DEFAULT_SCHEMA = [dbo]"},
+		{"name is quoted", "a]b", objectID, AzureADGroupType,
+			"CREATE USER [a]]b] WITH SID = " + sid + ", TYPE = X, DEFAULT_SCHEMA = [dbo]"},
+	}
+	for _, tt := range tests {
+		got, err := azureADUserStatement(tt.user, tt.objectID, tt.principalType, "dbo")
+		if err != nil {
+			t.Errorf("%s: azureADUserStatement() error = %v", tt.name, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("%s: azureADUserStatement() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestAzureADUserStatementRejectsInvalidInput(t *testing.T) {
+	tests := []struct{ name, objectID, principalType string }{
+		{"unknown type", "cbb9c7db-2777-47b7-8954-0269ae3dc553", "S"},
+		{"injected type", "cbb9c7db-2777-47b7-8954-0269ae3dc553", "X; DROP USER [dbo]"},
+		{"invalid object ID", "not-a-guid", AzureADGroupType},
+	}
+	for _, tt := range tests {
+		if got, err := azureADUserStatement("user", tt.objectID, tt.principalType, "dbo"); err == nil {
+			t.Errorf("%s: azureADUserStatement() = %q, want an error", tt.name, got)
+		}
+	}
+}

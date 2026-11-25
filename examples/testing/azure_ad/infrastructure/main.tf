@@ -42,6 +42,12 @@ resource "azurerm_user_assigned_identity" "example" {
   resource_group_name = azurerm_resource_group.main.name
 }
 
+# Entra ID Security Group for testing group user (TYPE = X)
+resource "azuread_group" "test_group" {
+  display_name     = "e2e-mssql-group-${var.sql_server_name}"
+  security_enabled = true
+}
+
 # Azure SQL Server
 resource "azurerm_mssql_server" "main" {
   name                         = var.sql_server_name

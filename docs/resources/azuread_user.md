@@ -34,6 +34,26 @@ resource "mssql_azuread_user" "managed_identity" {
 }
 ```
 
+### Entra ID group (object_id and type required)
+
+A group user lets every member of the group sign in. Created by object ID, it needs `type = "X"`: a group created
+with the default `E` is not matched when its members sign in. The object ID can come from the `azuread` provider.
+
+```hcl
+data "azuread_group" "applications" {
+  display_name     = "GRP_APPLICATIONS"
+  security_enabled = true
+}
+
+resource "mssql_azuread_user" "applications" {
+  database_name = mssql_database.example.name
+  name          = data.azuread_group.applications.display_name
+  object_id     = data.azuread_group.applications.object_id
+  type          = "X"
+  roles         = ["db_datareader", "db_datawriter"]
+}
+```
+
 ## Argument Reference
 
 - `database_name` - (Required) The name of the database.
@@ -41,6 +61,7 @@ resource "mssql_azuread_user" "managed_identity" {
 - `object_id` - (Optional) The Azure AD object ID of the user. Required for managed identities, optional for email-based users. When not provided, the user is created using `FROM EXTERNAL PROVIDER`.
 - `default_schema` - (Optional) The default schema for the user. Defaults to `dbo`.
 - `roles` - (Optional) Set of database roles to assign to this user.
+- `type` - (Optional) The Entra ID principal type, used with `object_id`: `E` (default) for a user, a service principal or a managed identity, `X` for a group. Without `object_id` the server resolves the principal (`FROM EXTERNAL PROVIDER`) and `type` must not be set. Changing it forces a new resource.
 
 ## Attribute Reference
 
@@ -48,6 +69,7 @@ resource "mssql_azuread_user" "managed_identity" {
 - `object_id` - The Azure AD object ID (if provided).
 - `default_schema` - The default schema for the user.
 - `roles` - The set of database roles assigned to this user.
+- `type` - The Entra ID principal type read from the database: `E` (user, service principal, managed identity) or `X` (group).
 
 ## Import
 

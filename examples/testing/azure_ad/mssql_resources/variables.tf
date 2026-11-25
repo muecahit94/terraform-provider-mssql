@@ -94,6 +94,12 @@ variable "group_name" {
   default     = ""
 }
 
+variable "group_object_id" {
+  description = "Object ID of the Azure AD group (optional)"
+  type        = string
+  default     = ""
+}
+
 variable "sql_user_login" {
   description = "Login that e2e_sql_user is mapped to: e2e_login_a or e2e_login_b"
   type        = string
