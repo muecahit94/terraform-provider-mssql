@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.8.3...v1.9.0) (2026-11-25)
+
+
+### Features
+
+* support Entra ID group users in mssql_azuread_user ([#55](https://github.com/muecahit94/terraform-provider-mssql/issues/55)) ([66969ec](https://github.com/muecahit94/terraform-provider-mssql/commit/66969ec8689d34fd7b2d3da02f1aa0b89bab2001))
+
 ## [1.8.3](https://github.com/muecahit94/terraform-provider-mssql/compare/v1.8.2...v1.8.3) (2026-11-11)
 
 
