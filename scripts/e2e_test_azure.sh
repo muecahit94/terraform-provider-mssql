@@ -35,6 +35,8 @@ SQL_HOST=""
 DB_NAME=""
 MI_NAME=""
 MI_OBJECT_ID=""
+GROUP_NAME=""
+GROUP_OBJECT_ID=""
 SQL_USER=""
 SQL_PASSWORD=""
 AZURE_SUBSCRIPTION_ID=""
@@ -48,6 +50,8 @@ set_tf_vars() {
         -var="database_name=$DB_NAME"
         -var="mi_name=$MI_NAME"
         -var="mi_object_id=$MI_OBJECT_ID"
+        -var="group_name=$GROUP_NAME"
+        -var="group_object_id=$GROUP_OBJECT_ID"
         -var="azure_tenant_id=$AZURE_TENANT_ID"
         -var="developer_email=${DEVELOPER_EMAIL:-}"
         "$@"
@@ -256,13 +260,16 @@ main() {
     DB_NAME=$(terraform output -raw database_name)
     MI_NAME=$(terraform output -raw mi_name)
     MI_OBJECT_ID=$(terraform output -raw mi_principal_id)
+    GROUP_NAME=$(terraform output -raw group_name 2>/dev/null || echo "")
+    GROUP_OBJECT_ID=$(terraform output -raw group_object_id 2>/dev/null || echo "")
     SQL_USER=$(terraform output -raw sql_admin_username)
     SQL_PASSWORD=$(terraform output -raw sql_admin_password)
 
     log_info "Infrastructure Details:"
-    echo "  Host: $SQL_HOST"
-    echo "  DB:   $DB_NAME"
-    echo "  MI:   $MI_NAME ($MI_OBJECT_ID)"
+    echo "  Host:  $SQL_HOST"
+    echo "  DB:    $DB_NAME"
+    echo "  MI:    $MI_NAME ($MI_OBJECT_ID)"
+    echo "  Group: $GROUP_NAME ($GROUP_OBJECT_ID)"
 
     # Wait for firewall rules to propagate
     log_info "Waiting 30 seconds for Firewall Rule propagation..."
@@ -349,6 +356,18 @@ main() {
         else
             log_record "SQL Verify: Developer Role Membership (Option 1: inline roles)" "FAIL"
         fi
+    fi
+
+    # Entra ID Group User with TYPE = X (PR #55 feature)
+    if [ -n "$GROUP_NAME" ] && [ -n "$GROUP_OBJECT_ID" ]; then
+        GROUP_TYPE=$(sql_value "$DB_NAME" "SELECT type FROM sys.database_principals WHERE name = '$GROUP_NAME'")
+        check_eq "SQL Verify: Entra ID Group User exists with type X" "$GROUP_TYPE" "X"
+
+        GROUP_ROLES_COUNT=$(sql_value "$DB_NAME" "SELECT COUNT(*) FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE m.name = '$GROUP_NAME' AND r.name IN ('db_datareader', 'db_datawriter')")
+        check_eq "SQL Verify: Entra ID Group User roles (db_datareader, db_datawriter)" "$GROUP_ROLES_COUNT" "2"
+
+        check_eq "Terraform Output: Group user type is X" \
+            "$(terraform -chdir="$RESOURCES_DIR" output -raw group_user_type 2>/dev/null)" "X"
     fi
 
     # Azure SQL Database specifics (issue #49 and the features of 1.8)
@@ -474,6 +493,25 @@ main() {
         fi
     else
         log_record "Drift Recovery: Role membership restoration" "FAIL"
+    fi
+
+    # Test 5: Delete Entra ID Group user and recover
+    if [ -n "$GROUP_NAME" ]; then
+        log_info "Test: Entra ID Group User deletion recovery..."
+        run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+            "DROP USER [$GROUP_NAME];" >/dev/null 2>&1 || true
+
+        apply_output=$(tf_apply)
+        if echo "$apply_output" | grep -q "Apply complete"; then
+            if run_sql "$SQL_HOST" "$SQL_USER" "$SQL_PASSWORD" "$DB_NAME" \
+                "SELECT 1 FROM sys.database_principals WHERE name = '$GROUP_NAME' AND type = 'X'" | grep -v "Executed in" | grep -q "1"; then
+                log_record "Drift Recovery: Entra ID Group User recreation" "PASS"
+            else
+                log_record "Drift Recovery: Entra ID Group User recreation" "FAIL"
+            fi
+        else
+            log_record "Drift Recovery: Entra ID Group User recreation" "FAIL"
+        fi
     fi
 
     # =========================================================================

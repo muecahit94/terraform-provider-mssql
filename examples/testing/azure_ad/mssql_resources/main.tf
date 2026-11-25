@@ -129,15 +129,17 @@ resource "mssql_database_role_member" "mi_role_member" {
 # =============================================================================
 
 locals {
-  create_group = var.group_name != ""
+  create_group = var.group_name != "" && var.group_object_id != ""
 }
 
-# Create a database user for an Azure AD group
+# Create a database user for an Azure AD group with object_id and type = "X"
 resource "mssql_azuread_user" "group" {
   count = local.create_group ? 1 : 0
 
   database_name  = var.database_name
   name           = var.group_name
+  object_id      = var.group_object_id
+  type           = "X"
   default_schema = "dbo"
   roles          = ["db_datareader", "db_datawriter"]
 }

@@ -54,6 +54,16 @@ output "mi_principal_id" {
   value       = azurerm_user_assigned_identity.example.principal_id
 }
 
+output "group_name" {
+  description = "Name of the Entra ID security group"
+  value       = azuread_group.test_group.display_name
+}
+
+output "group_object_id" {
+  description = "Object ID of the Entra ID security group"
+  value       = azuread_group.test_group.object_id
+}
+
 output "next_step" {
   description = "Instructions for the next step"
   value       = <<-EOT
